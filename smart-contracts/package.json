@@ -1,1 +1,15 @@
-
+{
+  "name": "based-wheel-smart-contracts",
+  "version": "1.0.0",
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy": "npx hardhat run scripts/deploy.js --network base",
+    "deploy:sepolia": "npx hardhat run scripts/deploy.js --network base_sepolia"
+  },
+  "dependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.10.0",
+    "hardhat": "^2.22.0"
+  }
+}
