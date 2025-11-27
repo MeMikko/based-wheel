@@ -12,23 +12,21 @@ export async function GET(req: Request) {
         style={{
           width: "100%",
           height: "100%",
+          background: "linear-gradient(135deg, #8b5cf6, #ec4899)",
           display: "flex",
-          background: "linear-gradient(135deg, #7e22ce, #ec4899)",
-          justifyContent: "center",
           alignItems: "center",
-          fontSize: 72,
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "40px",
+          fontSize: 70,
+          fontWeight: 900,
           color: "white",
-          fontWeight: "bold",
-          padding: "50px",
-          textAlign: "center"
+          textShadow: "0 8px 30px rgba(0,0,0,0.4)",
         }}
       >
         {text}
       </div>
     ),
-    {
-      width: 1200,
-      height: 630
-    }
+    { width: 1200, height: 630 }
   );
 }
