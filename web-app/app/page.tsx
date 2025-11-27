@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
+import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 
 const MOTIVATIONS = [
   "GM legend",
@@ -20,12 +21,32 @@ const MOTIVATIONS = [
 const MONEY_SEGMENTS = new Set([2, 5, 8, 11, 14, 17, 20, 23]); // 8 positions
 const JACKPOT_INDEX = 0;
 
+// soppari – aseta tämä Vercel envissä: NEXT_PUBLIC_CONTRACT_ADDRESS
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
+
+// minimi ABI – vain mitä frontti tarvitsee
+const CONTRACT_ABI = [
+  "function spinFree()",
+  "function spinPaid() payable",
+  "function getPoolBalance() view returns (uint256)",
+  "function freeSpinAvailable(address) view returns (bool)",
+  "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)"
+];
+
+const SPIN_PRICE = parseEther("0.00042");
+
 export default function Page() {
   const [spinsToday, setSpinsToday] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [result, setResult] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
+
+  const [address, setAddress] = useState<string | null>(null);
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [prizePool, setPrizePool] = useState<string>("X.XXXX");
+  const [isFreeAvailable, setIsFreeAvailable] = useState<boolean | null>(null);
 
   // Load spins for today
   useEffect(() => {
@@ -35,53 +56,176 @@ export default function Page() {
     if (saved) setSpinsToday(parseInt(saved, 10));
   }, []);
 
+  // Init provider if window.ethereum available
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // @ts-ignore
+    if (window.ethereum) {
+      // @ts-ignore
+      const p = new BrowserProvider(window.ethereum);
+      setProvider(p);
+    }
+  }, []);
+
+  // When address or provider changes, refresh pool & free spin status
+  useEffect(() => {
+    if (!provider || !CONTRACT_ADDRESS) return;
+    refreshPool();
+    if (address) {
+      checkFreeSpin();
+    }
+  }, [provider, address]);
+
   const saveSpins = (v: number) => {
+    if (typeof window === "undefined") return;
     const key = `spins_${new Date().toDateString()}`;
     setSpinsToday(v);
     window.localStorage.setItem(key, v.toString());
   };
 
-  const spin = () => {
-    if (isSpinning) return;
+  const connectWallet = async () => {
+    if (typeof window === "undefined") return;
+    // @ts-ignore
+    if (!window.ethereum) {
+      alert("No wallet detected. Install MetaMask or a Base-compatible wallet.");
+      return;
+    }
 
-    setIsSpinning(true);
-    setResult(null);
-    setShowConfetti(false);
+    try {
+      // @ts-ignore
+      const accounts: string[] = await window.ethereum.request({
+        method: "eth_requestAccounts"
+      });
+      if (accounts.length > 0) {
+        setAddress(accounts[0]);
+        // provider jo asetettu useEffectissä
+      }
+    } catch (err) {
+      console.error("Wallet connect error:", err);
+    }
+  };
 
-    // Visual spin: 6–10 complete rotations + random offset
-    const fullSpins = 6 + Math.random() * 4;
-    const newRot = rotation + fullSpins * 360 + Math.random() * 360;
-    setRotation(newRot);
+  const getReadContract = () => {
+    if (!provider || !CONTRACT_ADDRESS) return null;
+    return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+  };
 
-    setTimeout(() => {
-      // On-chain logic will replace this later
-      const r = Math.random() * 100;
-      let text = MOTIVATIONS[Math.floor(Math.random() * MOTIVATIONS.length)];
-      let eth = false;
+  const getWriteContract = async () => {
+    if (!provider || !CONTRACT_ADDRESS) return null;
+    const signer = await provider.getSigner();
+    return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+  };
 
-      if (r < 95) {
-        // 95% → motivational
-      } else if (r < 95 + 4) {
-        text = "You won 0.001 ETH!";
-        eth = true;
-      } else if (r < 95 + 4 + 0.9) {
-        text = "You won 0.01 ETH!";
-        eth = true;
-      } else if (r < 95 + 4 + 0.9 + 0.09) {
-        text = "You won 0.05 ETH!";
-        eth = true;
+  const refreshPool = async () => {
+    try {
+      const c = getReadContract();
+      if (!c) return;
+      const bal = await c.getPoolBalance();
+      setPrizePool(parseFloat(formatEther(bal)).toFixed(4));
+    } catch (err) {
+      console.error("Error fetching pool:", err);
+      setPrizePool("X.XXXX");
+    }
+  };
+
+  const checkFreeSpin = async () => {
+    try {
+      const c = getReadContract();
+      if (!c || !address) return;
+      const ok = await c.freeSpinAvailable(address);
+      setIsFreeAvailable(ok);
+    } catch (err) {
+      console.error("Error checking free spin:", err);
+      setIsFreeAvailable(null);
+    }
+  };
+
+  const spinOnChain = async (useFree: boolean) => {
+    if (!address) {
+      await connectWallet();
+      if (!address) return;
+    }
+    const c = await getWriteContract();
+    if (!c) {
+      alert("Contract not configured (missing address or provider).");
+      return;
+    }
+
+    try {
+      setIsSpinning(true);
+      setResult(null);
+      setShowConfetti(false);
+
+      // visual spin
+      const fullSpins = 6 + Math.random() * 4;
+      const newRot = rotation + fullSpins * 360 + Math.random() * 360;
+      setRotation(newRot);
+
+      // call contract in parallel
+      let tx;
+      if (useFree) {
+        tx = await c.spinFree();
       } else {
-        text = "JACKPOT (up to 1.5 ETH)!";
-        eth = true;
+        tx = await c.spinPaid({ value: SPIN_PRICE });
       }
 
-      setResult(text);
-      if (eth) setShowConfetti(true);
+      const receipt = await tx.wait();
 
-      const s = spinsToday + 1;
-      saveSpins(s);
+      // parse SpinResult event if exists
+      let display = useFree
+        ? "Free spin confirmed!"
+        : "Paid spin confirmed!";
+      let ethWin = false;
+
+      try {
+        for (const log of receipt.logs) {
+          try {
+            const parsed = c.interface.parseLog(log);
+            if (parsed.name === "SpinResult") {
+              const tier = parsed.args.tier as number;
+              const amount = parsed.args.amountWei as bigint;
+              const message = parsed.args.message as string;
+
+              if (tier === 0) {
+                display = message || "Motivational only";
+              } else {
+                const amtFormatted = formatEther(amount);
+                display = message || `You won ${amtFormatted} ETH!`;
+                if (amount > 0n) ethWin = true;
+              }
+              break;
+            }
+          } catch {
+            // not our event
+          }
+        }
+      } catch (e) {
+        console.warn("Event parse failed", e);
+      }
+
+      setTimeout(() => {
+        setResult(display);
+        if (ethWin) setShowConfetti(true);
+
+        const s = spinsToday + 1;
+        saveSpins(s);
+
+        refreshPool();
+        checkFreeSpin();
+
+        setIsSpinning(false);
+      }, 4200);
+    } catch (err: any) {
+      console.error("Spin tx error:", err);
       setIsSpinning(false);
-    }, 4200);
+      setResult(err?.shortMessage || err?.message || "Transaction failed");
+    }
+  };
+
+  const handleSpinClick = () => {
+    // jos free spin vielä sopparin mukaan / local päivän eka, käytetään freeä
+    const shouldUseFree = spinsToday === 0 && (isFreeAvailable !== false);
+    void spinOnChain(shouldUseFree);
   };
 
   const renderWheel = () => (
@@ -155,9 +299,14 @@ export default function Page() {
 
   const buttonLabel = isSpinning
     ? "SPINNING..."
-    : spinsToday === 0
+    : spinsToday === 0 && (isFreeAvailable !== false)
     ? "FREE SPIN"
     : "SPIN 0.00042 ETH";
+
+  const shortAddress =
+    address && address.length > 8
+      ? `${address.slice(0, 6)}...${address.slice(-4)}`
+      : address;
 
   return (
     <>
@@ -172,15 +321,24 @@ export default function Page() {
       )}
 
       <div className="min-h-screen flex flex-col items-center justify-center p-6 select-none">
-        <h1 className="text-5xl md:text-6xl font-black mb-4 drop-shadow-2xl text-center">
-          BASED WHEEL
-        </h1>
+        <div className="w-full flex justify-between items-center max-w-3xl mb-4">
+          <h1 className="text-3xl md:text-4xl font-black drop-shadow-2xl">
+            BASED WHEEL
+          </h1>
 
-        <p className="text-lg md:text-xl mb-8 opacity-90 text-center">
-          1 free spin/day • then 0.00042 ETH (on-chain)
+          <button
+            onClick={connectWallet}
+            className="px-4 py-2 text-sm md:text-base font-bold bg-black/70 rounded-2xl border border-white/30 hover:bg-black/90 transition"
+          >
+            {address ? shortAddress : "Connect Wallet"}
+          </button>
+        </div>
+
+        <p className="text-sm md:text-base mb-6 opacity-90 text-center">
+          1 free spin/day • then 0.00042 ETH on Base
         </p>
 
-        <div className="relative w-72 h-72 md:w-96 md:h-96 mb-10">
+        <div className="relative w-72 h-72 md:w-96 md:h-96 mb-8">
           {renderWheel()}
           <div
             className="absolute -top-4 left-1/2 -translate-x-1/2 
@@ -190,26 +348,29 @@ export default function Page() {
         </div>
 
         {result && (
-          <h2 className="text-2xl md:text-3xl font-black mb-8 text-yellow-300 drop-shadow-2xl text-center">
+          <h2 className="text-xl md:text-2xl font-black mb-6 text-yellow-300 drop-shadow-2xl text-center">
             {result}
           </h2>
         )}
 
-        <div className="text-xl md:text-2xl mb-6 font-bold">
-          Prize pool: X.XXXX ETH (live data soon)
+        <div className="text-lg md:text-xl mb-2 font-bold">
+          Prize pool: {prizePool} ETH
+        </div>
+        <div className="text-xs md:text-sm mb-6 opacity-80">
+          Contract: {CONTRACT_ADDRESS ? CONTRACT_ADDRESS : "not set (env)"}
         </div>
 
         <button
-          onClick={spin}
-          disabled={isSpinning}
-          className="px-10 md:px-16 py-5 md:py-6 text-2xl md:text-3xl font-black 
+          onClick={handleSpinClick}
+          disabled={isSpinning || !CONTRACT_ADDRESS}
+          className="px-10 md:px-16 py-4 md:py-5 text-xl md:text-2xl font-black 
             bg-yellow-400 text-black rounded-3xl shadow-2xl 
             hover:scale-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {buttonLabel}
+          {CONTRACT_ADDRESS ? buttonLabel : "Set contract env first"}
         </button>
 
-        <p className="mt-6 text-lg">Spins today: {spinsToday}</p>
+        <p className="mt-4 text-sm md:text-base">Spins today: {spinsToday}</p>
       </div>
     </>
   );
