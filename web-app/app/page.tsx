@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
 import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 
+const ADMIN_ENS = "elize.base.eth";
 const MOTIVATIONS = [
   "GM legend",
   "HODL",
