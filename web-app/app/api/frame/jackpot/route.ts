@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
-import { BrowserProvider, Contract, formatEther } from "ethers";
+import { JsonRpcProvider, Contract, formatEther } from "ethers";
 
 export const dynamic = "force-dynamic";
 
 const ABI = ["function getPoolBalance() view returns (uint256)"];
 
 export async function GET() {
-  const provider = new BrowserProvider(new (class {} )(), process.env.NEXT_PUBLIC_BASE_RPC!);
-  const contract = new Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!, ABI, provider);
+  // SERVER-SIDE PROVIDER
+  const provider = new JsonRpcProvider(process.env.NEXT_PUBLIC_BASE_RPC!);
+
+  const contract = new Contract(
+    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!,
+    ABI,
+    provider
+  );
 
   const bal = await contract.getPoolBalance();
   const eth = Number(formatEther(bal));
