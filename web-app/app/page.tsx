@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
 import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 
+// Fix TypeScript: extend Window to include ethereum
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
+
 const ADMIN_ENS = "elize.base.eth";
 const ADMIN_FALLBACK = "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
 
