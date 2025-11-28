@@ -5,6 +5,7 @@ import Confetti from "confetti-react";
 import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 
 const ADMIN_ENS = "elize.base.eth";
+const ADMIN_FALLBACK = "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
 
 const MOTIVATIONS = [
   "GM legend",
@@ -47,82 +48,86 @@ export default function Page() {
   const [prizePool, setPrizePool] = useState<string>("X.XXXX");
   const [isFreeAvailable, setIsFreeAvailable] = useState<boolean | null>(null);
 
-  const [adminAddress, setAdminAddress] = useState<string | null>(null);
+  const [adminAddressResolved, setAdminAddressResolved] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [recentWins, setRecentWins] = useState<
     { player: string; tier: number; amount: string; message: string }[]
   >([]);
 
-  // Load spins today
+  /* Load today's spin count */
   useEffect(() => {
     if (typeof window === "undefined") return;
     const key = `spins_${new Date().toDateString()}`;
     const saved = window.localStorage.getItem(key);
-    if (saved) setSpinsToday(parseInt(saved, 10));
+    if (saved) setSpinsToday(parseInt(saved));
   }, []);
 
-  // Init provider
+  /* Init provider */
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // @ts-ignore
     if (window.ethereum) {
-      // @ts-ignore
       setProvider(new BrowserProvider(window.ethereum));
     }
   }, []);
 
-  // Resolve ENS admin & refresh pool/events when wallet or provider changes
+  /* Resolve ENS + admin check + data refresh */
   useEffect(() => {
-    if (!provider || !CONTRACT_ADDRESS) return;
+    if (!provider) return;
 
     const init = async () => {
-      await refreshPool();
-      await loadRecentWins();
+      // Always refresh pool & recent events if contract exists
+      if (CONTRACT_ADDRESS) {
+        await refreshPool();
+        await loadRecentWins();
+      }
 
-      // Resolve admin ENS
+      // ENS resolution
       try {
         const resolved = await provider.resolveName(ADMIN_ENS);
-        if (resolved) setAdminAddress(resolved.toLowerCase());
-      } catch (e) {
-        console.error("ENS resolution failed", e);
+        if (resolved) {
+          setAdminAddressResolved(resolved.toLowerCase());
+        } else {
+          setAdminAddressResolved(ADMIN_FALLBACK); // fallback
+        }
+      } catch {
+        setAdminAddressResolved(ADMIN_FALLBACK);
       }
 
-      if (address && adminAddress && address.toLowerCase() === adminAddress) {
-        setIsAdmin(true);
-      } else {
-        setIsAdmin(false);
+      // Check admin
+      if (address && adminAddressResolved) {
+        const lower = address.toLowerCase();
+        setIsAdmin(lower === adminAddressResolved || lower === ADMIN_FALLBACK);
       }
 
-      if (address) checkFreeSpin();
+      // Check free spin
+      if (address && CONTRACT_ADDRESS) await checkFreeSpin();
     };
 
     void init();
-  }, [provider, address, adminAddress]);
+  }, [provider, address, adminAddressResolved]);
 
-  const saveSpins = (v: number) => {
+  const saveSpins = (num: number) => {
     const key = `spins_${new Date().toDateString()}`;
-    setSpinsToday(v);
-    window.localStorage.setItem(key, v.toString());
+    setSpinsToday(num);
+    localStorage.setItem(key, num.toString());
   };
 
+  /* Wallet connect */
   const connectWallet = async () => {
-    // @ts-ignore
     if (!window.ethereum) {
       alert("No wallet detected.");
       return;
     }
     try {
-      // @ts-ignore
-      const accs: string[] = await window.ethereum.request({
-        method: "eth_requestAccounts"
-      });
-      if (accs.length > 0) setAddress(accs[0]);
+      const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accs?.length) setAddress(accs[0]);
     } catch (e) {
       console.error(e);
     }
   };
 
+  /* Contract helpers */
   const getReadContract = () => {
     if (!provider || !CONTRACT_ADDRESS) return null;
     return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
@@ -138,8 +143,8 @@ export default function Page() {
     try {
       const c = getReadContract();
       if (!c) return;
-      const bal = await c.getPoolBalance();
-      setPrizePool(parseFloat(formatEther(bal)).toFixed(4));
+      const balance = await c.getPoolBalance();
+      setPrizePool(parseFloat(formatEther(balance)).toFixed(4));
     } catch {
       setPrizePool("X.XXXX");
     }
@@ -158,8 +163,9 @@ export default function Page() {
 
   const loadRecentWins = async () => {
     try {
+      if (!provider || !CONTRACT_ADDRESS) return;
       const c = getReadContract();
-      if (!c || !provider) return;
+      if (!c) return;
 
       const logs = await provider.getLogs({
         address: CONTRACT_ADDRESS,
@@ -171,19 +177,16 @@ export default function Page() {
 
       for (const log of logs.reverse()) {
         try {
-          const parsedLog = c.interface.parseLog(log);
-          if (parsedLog.name === "SpinResult") {
-            const tier = Number(parsedLog.args.tier);
-            const amount = BigInt(parsedLog.args.amountWei);
-            const player = parsedLog.args.player as string;
-            const message = parsedLog.args.message as string;
-
+          const pl = c.interface.parseLog(log);
+          if (pl.name === "SpinResult") {
+            const tier = Number(pl.args.tier);
+            const amount = BigInt(pl.args.amountWei);
             if (tier > 0) {
               parsed.push({
-                player,
+                player: pl.args.player,
                 tier,
                 amount: formatEther(amount),
-                message
+                message: pl.args.message
               });
             }
           }
@@ -192,30 +195,35 @@ export default function Page() {
 
       setRecentWins(parsed.slice(0, 25));
     } catch (e) {
-      console.error("Failed to load events", e);
+      console.error("Failed loading events", e);
     }
   };
 
+  /* Spin */
   const spinOnChain = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
       if (!address) return;
     }
+    if (!CONTRACT_ADDRESS) return alert("Contract not deployed.");
 
     try {
       const c = await getWriteContract();
-      if (!c) return alert("Contract not available.");
+      if (!c) return;
 
       setIsSpinning(true);
       setResult(null);
       setShowConfetti(false);
 
       // Visual spin
-      const full = 6 + Math.random() * 4;
-      setRotation(rotation + full * 360 + Math.random() * 360);
+      const fullTurns = 6 + Math.random() * 4;
+      const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
+      setRotation(endRotation);
 
-      // On-chain call
-      const tx = useFree ? await c.spinFree() : await c.spinPaid({ value: SPIN_PRICE });
+      const tx = useFree
+        ? await c.spinFree()
+        : await c.spinPaid({ value: SPIN_PRICE });
+
       const receipt = await tx.wait();
 
       let display = "Spin complete!";
@@ -223,13 +231,11 @@ export default function Page() {
 
       for (const log of receipt.logs) {
         try {
-          const parsed = c.interface.parseLog(log);
-          if (parsed.name === "SpinResult") {
-            const tier = Number(parsed.args.tier);
-            const amount = BigInt(parsed.args.amountWei);
-            const message = parsed.args.message as string;
-            display = message || display;
-            if (amount > 0n) ethWin = true;
+          const pl = c.interface.parseLog(log);
+          if (pl.name === "SpinResult") {
+            const amt = BigInt(pl.args.amountWei);
+            display = pl.args.message || display;
+            if (amt > 0n) ethWin = true;
           }
         } catch {}
       }
@@ -245,11 +251,9 @@ export default function Page() {
 
         setIsSpinning(false);
       }, 4200);
-
     } catch (err: any) {
-      console.error(err);
       setIsSpinning(false);
-      setResult(err?.shortMessage || err?.message || "Transaction failed");
+      setResult(err?.shortMessage || err?.message || "Failed");
     }
   };
 
@@ -258,6 +262,7 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
+  /* Wheel rendering */
   const renderWheel = () => (
     <svg
       viewBox="0 0 100 100"
@@ -271,7 +276,7 @@ export default function Page() {
     >
       {Array.from({ length: 24 }).map((_, i) => {
         const start = i * 15;
-        const end = (i + 1) * 15;
+        const end = start + 15;
 
         const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
         const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
@@ -284,10 +289,10 @@ export default function Page() {
         const fill = isJackpot
           ? "#FFD700"
           : isMoney
-          ? "hsl(90, 80%, 55%)"
+          ? "hsl(90,80%,55%)"
           : i % 2
-          ? "hsl(300, 80%, 55%)"
-          : "hsl(330, 80%, 55%)";
+          ? "hsl(300,80%,55%)"
+          : "hsl(330,80%,55%)";
 
         const mid = start + 7.5;
         const lx = 50 + 28 * Math.cos((Math.PI * mid) / 180);
@@ -320,24 +325,22 @@ export default function Page() {
     </svg>
   );
 
-  const buttonLabel =
-    isSpinning
-      ? "SPINNING..."
-      : spinsToday === 0 && (isFreeAvailable !== false)
-      ? "FREE SPIN"
-      : "SPIN 0.00042 ETH";
+  const shortAddr = address
+    ? address.slice(0, 6) + "..." + address.slice(-4)
+    : "";
 
-  const shortAddr =
-    address && address.length > 10
-      ? address.slice(0, 6) + "..." + address.slice(-4)
-      : address;
+  const buttonLabel = isSpinning
+    ? "SPINNING..."
+    : spinsToday === 0 && isFreeAvailable !== false
+    ? "FREE SPIN"
+    : "SPIN 0.00042 ETH";
 
   return (
     <>
-      {showConfetti && typeof window !== "undefined" && (
+      {showConfetti && (
         <Confetti
-          width={window.innerWidth}
-          height={window.innerHeight}
+          width={typeof window !== "undefined" ? window.innerWidth : 300}
+          height={typeof window !== "undefined" ? window.innerHeight : 300}
           recycle={false}
           numberOfPieces={600}
         />
@@ -345,7 +348,7 @@ export default function Page() {
 
       <div className="min-h-screen flex flex-col items-center p-6">
 
-        {/* Top bar */}
+        {/* Top */}
         <div className="w-full max-w-3xl flex justify-between mb-4">
           <h1 className="text-3xl font-black">BASED WHEEL</h1>
           <button
@@ -359,7 +362,7 @@ export default function Page() {
         <p className="opacity-80 mb-4">1 free spin/day • 0.00042 ETH after</p>
 
         {/* Wheel */}
-        <div className="relative w-72 h-72 mb-8">
+        <div className="relative w-72 h-72 mb-8 mx-auto">
           {renderWheel()}
           <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 
             border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent 
@@ -367,42 +370,42 @@ export default function Page() {
           />
         </div>
 
-        {/* Result */}
         {result && (
           <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center">
             {result}
           </h2>
         )}
 
-        {/* Pool */}
-        <div className="text-xl font-bold mb-2">Prize pool: {prizePool} ETH</div>
+        <div className="text-xl font-bold mb-2">
+          Prize pool: {prizePool} ETH
+        </div>
 
-        {/* Button */}
         <button
           disabled={isSpinning || !CONTRACT_ADDRESS}
           onClick={handleSpinClick}
-          className="px-10 py-4 text-xl bg-yellow-400 text-black rounded-3xl font-black shadow-xl"
+          className="px-10 py-4 text-xl bg-yellow-400 text-black rounded-3xl font-black shadow-xl disabled:opacity-40"
         >
-          {buttonLabel}
+          {CONTRACT_ADDRESS ? buttonLabel : "CONTRACT NOT DEPLOYED"}
         </button>
 
         <p className="mt-3 opacity-90">Spins today: {spinsToday}</p>
 
-        {/* ADMIN PANEL (only elize.base.eth) */}
+        {/* ADMIN */}
         {isAdmin && (
           <div className="w-full max-w-3xl mt-8 p-5 bg-black/30 border border-white/20 rounded-2xl">
             <h2 className="text-xl font-bold mb-3">Admin Panel</h2>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
+
               <button
                 onClick={async () => {
                   try {
                     const c = await getWriteContract();
                     const tx = await c.withdraw40();
                     await tx.wait();
-                    alert("40% withdrawn.");
+                    alert("40% withdrawn");
                     refreshPool();
-                  } catch (e:any) {
+                  } catch (e: any) {
                     alert(e.message);
                   }
                 }}
@@ -420,8 +423,8 @@ export default function Page() {
                     await tx.wait();
                     tx = await c.emergencyWithdrawAll();
                     await tx.wait();
-                    alert("Game stopped & all funds withdrawn!");
-                  } catch (e:any) {
+                    alert("Game stopped & all funds withdrawn.");
+                  } catch (e: any) {
                     alert(e.message);
                   }
                 }}
@@ -438,7 +441,9 @@ export default function Page() {
           <h2 className="text-xl font-bold mb-3">Recent Wins</h2>
 
           {recentWins.length === 0 ? (
-            <p className="opacity-80">No wins yet.</p>
+            <p className="opacity-80">
+              {CONTRACT_ADDRESS ? "No wins yet." : "No contract deployed."}
+            </p>
           ) : (
             <div className="flex flex-col gap-2">
               {recentWins.map((w, i) => (
@@ -446,7 +451,9 @@ export default function Page() {
                   key={i}
                   className="p-2 bg-black/40 rounded-xl border border-white/10"
                 >
-                  <div className="font-bold text-yellow-300">{w.amount} ETH</div>
+                  <div className="font-bold text-yellow-300">
+                    {w.amount} ETH
+                  </div>
                   <div className="text-sm opacity-80">
                     {w.player.slice(0, 6)}...{w.player.slice(-4)} – {w.message}
                   </div>
