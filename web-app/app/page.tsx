@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
 import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 
-// Fix TypeScript: extend Window to include ethereum
+// Fix TypeScript
 declare global {
   interface Window {
     ethereum?: any;
@@ -14,18 +14,22 @@ declare global {
 const ADMIN_ENS = "elize.base.eth";
 const ADMIN_FALLBACK = "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
 
-const MOTIVATIONS = [
-  "GM legend",
+const SEGMENTS = [
+  "JACKPOT",
   "HODL",
-  "LFG",
+  "ETH",
   "WAGMI",
   "Wen?",
-  "Based",
-  "ship it"
+  "ETH",
+  "ship it",
+  "ETH",
+  "HODL",
+  "LFG",
+  "ETH",
+  "Wen?",
 ];
 
-// 12 segment wheel → money indices must be 12–friendly
-const MONEY_SEGMENTS = new Set([2, 5, 7, 10]);
+const MONEY_SEGMENTS = new Set([2, 5, 8, 10]); // "ETH" positions
 const JACKPOT_INDEX = 0;
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
@@ -47,7 +51,9 @@ export default function Page() {
   const [spinsToday, setSpinsToday] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
+
   const [result, setResult] = useState<string | null>(null);
+  const [showPopup, setShowPopup] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
 
   const [address, setAddress] = useState<string | null>(null);
@@ -62,7 +68,7 @@ export default function Page() {
     { player: string; tier: number; amount: string; message: string }[]
   >([]);
 
-  /* Load today's spin count */
+  /* Load spins */
   useEffect(() => {
     if (typeof window === "undefined") return;
     const key = `spins_${new Date().toDateString()}`;
@@ -70,15 +76,13 @@ export default function Page() {
     if (saved) setSpinsToday(parseInt(saved));
   }, []);
 
-  /* Init provider */
+  /* Provider init */
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (window.ethereum) {
-      setProvider(new BrowserProvider(window.ethereum));
-    }
+    if (window.ethereum) setProvider(new BrowserProvider(window.ethereum));
   }, []);
 
-  /* Resolve ENS + admin check + data refresh */
+  /* Admin + contract data */
   useEffect(() => {
     if (!provider) return;
 
@@ -88,76 +92,48 @@ export default function Page() {
         await loadRecentWins();
       }
 
+      // ENS resolution
       try {
         const resolved = await provider.resolveName(ADMIN_ENS);
-        if (resolved) setAdminAddressResolved(resolved.toLowerCase());
-        else setAdminAddressResolved(ADMIN_FALLBACK);
+        setAdminAddressResolved(resolved ? resolved.toLowerCase() : ADMIN_FALLBACK);
       } catch {
         setAdminAddressResolved(ADMIN_FALLBACK);
       }
 
+      // Admin check
       if (address && adminAddressResolved) {
         const lower = address.toLowerCase();
         setIsAdmin(lower === adminAddressResolved || lower === ADMIN_FALLBACK);
       }
 
+      // Free spin availability
       if (address && CONTRACT_ADDRESS) await checkFreeSpin();
     };
 
     void init();
   }, [provider, address, adminAddressResolved]);
 
-  const saveSpins = (num: number) => {
+  const saveSpins = (n: number) => {
     const key = `spins_${new Date().toDateString()}`;
-    setSpinsToday(num);
-    localStorage.setItem(key, num.toString());
+    setSpinsToday(n);
+    localStorage.setItem(key, n.toString());
   };
 
-  /* 🔥 FIXED — ENSURE WALLET IS ON BASE MAINNET */
   const connectWallet = async () => {
-    if (!window.ethereum) return alert("No wallet detected.");
-
+    if (!window.ethereum) return alert("No wallet detected");
     try {
-      // Switch to Base
-      await window.ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0x2105" }]
-      });
-    } catch (switchError) {
-      // Add Base if missing
-      try {
-        await window.ethereum.request({
-          method: "wallet_addEthereumChain",
-          params: [
-            {
-              chainId: "0x2105",
-              chainName: "Base",
-              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-              rpcUrls: ["https://mainnet.base.org"],
-              blockExplorerUrls: ["https://base.blockscout.com"]
-            }
-          ]
-        });
-      } catch (addError) {
-        console.error("Failed adding Base:", addError);
-        return alert("Unable to switch to Base network.");
-      }
-    }
-
-    try {
-      const accs = await window.ethereum.request({
-        method: "eth_requestAccounts"
-      });
+      const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
       if (accs?.length) setAddress(accs[0]);
     } catch (e) {
       console.error(e);
     }
   };
 
-  const getReadContract = () => {
-    if (!provider || !CONTRACT_ADDRESS) return null;
-    return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
-  };
+  /* Contract helpers */
+  const getReadContract = () =>
+    provider && CONTRACT_ADDRESS
+      ? new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider)
+      : null;
 
   const getWriteContract = async () => {
     if (!provider || !CONTRACT_ADDRESS) return null;
@@ -165,6 +141,7 @@ export default function Page() {
     return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
   };
 
+  /* Refresh pool */
   const refreshPool = async () => {
     try {
       const c = getReadContract();
@@ -180,8 +157,7 @@ export default function Page() {
     try {
       const c = getReadContract();
       if (!c || !address) return;
-      const ok = await c.freeSpinAvailable(address);
-      setIsFreeAvailable(ok);
+      setIsFreeAvailable(await c.freeSpinAvailable(address));
     } catch {
       setIsFreeAvailable(null);
     }
@@ -207,47 +183,52 @@ export default function Page() {
           if (pl.name === "SpinResult") {
             const tier = Number(pl.args.tier);
             const amount = BigInt(pl.args.amountWei);
-            if (tier > 0) {
-              parsed.push({
-                player: pl.args.player,
-                tier,
-                amount: formatEther(amount),
-                message: pl.args.message
-              });
-            }
+            parsed.push({
+              player: pl.args.player,
+              tier,
+              amount: formatEther(amount),
+              message: pl.args.message
+            });
           }
         } catch {}
       }
 
       setRecentWins(parsed.slice(0, 25));
     } catch (e) {
-      console.error("Failed loading events", e);
+      console.error("Event load error", e);
     }
   };
 
+  /* Spin */
   const spinOnChain = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
       if (!address) return;
     }
-    if (!CONTRACT_ADDRESS) return alert("Contract not deployed.");
+    if (!CONTRACT_ADDRESS) return alert("Contract not deployed");
 
     try {
       const c = await getWriteContract();
       if (!c) return;
 
       setIsSpinning(true);
-      setResult(null);
+      setResult("Awaiting wallet confirmation...");
+      setShowPopup(false);
       setShowConfetti(false);
 
-      const fullTurns = 6 + Math.random() * 4;
-      const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
-      setRotation(endRotation);
-
+      // Wait for user confirmation
       const tx = useFree
         ? await c.spinFree()
         : await c.spinPaid({ value: SPIN_PRICE });
 
+      // Now user has confirmed → start spin animation
+      setResult("Spinning...");
+
+      const fullTurns = 8 + Math.random() * 4;
+      const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
+      setRotation(endRotation);
+
+      // Wait for on-chain result
       const receipt = await tx.wait();
 
       let display = "Spin complete!";
@@ -266,6 +247,8 @@ export default function Page() {
 
       setTimeout(async () => {
         setResult(display);
+        setShowPopup(true);
+
         if (ethWin) setShowConfetti(true);
 
         saveSpins(spinsToday + 1);
@@ -275,17 +258,11 @@ export default function Page() {
 
         setIsSpinning(false);
       }, 4200);
-
     } catch (err: any) {
-      console.error("TX ERROR:", err);
-      const msg =
-        err?.shortMessage ||
-        err?.data?.message ||
-        err?.message ||
-        "Transaction failed";
-
+      console.error(err);
       setIsSpinning(false);
-      setResult(msg);
+      setResult(err?.shortMessage || err?.message || "Failed");
+      setShowPopup(true);
     }
   };
 
@@ -294,6 +271,7 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
+  /* Wheel */
   const renderWheel = () => (
     <svg
       viewBox="0 0 100 100"
@@ -320,20 +298,12 @@ export default function Page() {
         const fill = isJackpot
           ? "#FFD700"
           : isMoney
-          ? "hsl(90,80%,55%)"
-          : i % 2
-          ? "hsl(300,80%,55%)"
-          : "hsl(330,80%,55%)";
+          ? "#00FF9A"
+          : "#FF44CC";
 
         const mid = start + 15;
-        const lx = 50 + 33 * Math.cos((Math.PI * mid) / 180);
-        const ly = 50 + 33 * Math.sin((Math.PI * mid) / 180);
-
-        const text = isJackpot
-          ? "JACKPOT"
-          : isMoney
-          ? "ETH"
-          : MOTIVATIONS[i % MOTIVATIONS.length];
+        const lx = 50 + 34 * Math.cos((Math.PI * mid) / 180);
+        const ly = 50 + 34 * Math.sin((Math.PI * mid) / 180);
 
         return (
           <g key={i}>
@@ -341,19 +311,19 @@ export default function Page() {
               d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
               fill={fill}
               stroke="#000"
-              strokeWidth="0.5"
+              strokeWidth="0.4"
             />
             <text
               x={lx}
               y={ly}
               fill={isJackpot ? "black" : "white"}
-              fontSize={isJackpot ? "6" : "5"}
+              fontSize="6"
               fontWeight="bold"
               textAnchor="middle"
               dominantBaseline="middle"
               transform={`rotate(${mid + 90} ${lx} ${ly})`}
             >
-              {text}
+              {SEGMENTS[i]}
             </text>
           </g>
         );
@@ -362,26 +332,54 @@ export default function Page() {
     </svg>
   );
 
-  /* --- UI --- */
+  /* UI helpers */
   const shortAddr = address
     ? address.slice(0, 6) + "..." + address.slice(-4)
     : "";
 
-  const buttonLabel = isSpinning
-    ? "SPINNING..."
-    : spinsToday === 0 && isFreeAvailable !== false
-    ? "FREE SPIN"
-    : "SPIN 0.00042 ETH";
+  const buttonLabel =
+    isSpinning
+      ? "SPINNING..."
+      : spinsToday === 0 && isFreeAvailable !== false
+      ? "FREE SPIN"
+      : "SPIN 0.00042 ETH";
 
   return (
     <>
       {showConfetti && (
         <Confetti
-          width={typeof window !== "undefined" ? window.innerWidth : 300}
-          height={typeof window !== "undefined" ? window.innerHeight : 300}
+          width={typeof window !== "undefined" ? window.innerWidth : 400}
+          height={typeof window !== "undefined" ? window.innerHeight : 400}
           recycle={false}
           numberOfPieces={700}
         />
+      )}
+
+      {/* RESULT POPUP */}
+      {showPopup && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
+          <div className="bg-black p-6 rounded-2xl border border-white/20 text-center w-80">
+            <h2 className="text-2xl font-bold mb-4 text-yellow-300">{result}</h2>
+
+            <button
+              onClick={() =>
+                window.open(
+                  `https://warpcast.com/~/compose?text=${encodeURIComponent(result || "")}`
+                )
+              }
+              className="w-full py-3 bg-purple-500 rounded-xl font-bold mb-4"
+            >
+              Share on Farcaster
+            </button>
+
+            <button
+              onClick={() => setShowPopup(false)}
+              className="w-full py-3 bg-white/10 rounded-xl"
+            >
+              Close
+            </button>
+          </div>
+        </div>
       )}
 
       <div
@@ -414,7 +412,7 @@ export default function Page() {
             relative w-72 h-72 mb-8 mx-auto
             transition-transform duration-300
             hover:scale-105 hover:rotate-1
-            drop-shadow-[0_0_25px_rgba(255,200,255,0.35)]
+            drop-shadow-[0_0_25px_rgba(255,200,255,0.4)]
           "
         >
           {renderWheel()}
@@ -428,7 +426,8 @@ export default function Page() {
           />
         </div>
 
-        {result && (
+        {/* Result preview */}
+        {result && !showPopup && (
           <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center drop-shadow">
             {result}
           </h2>
@@ -453,7 +452,7 @@ export default function Page() {
 
         <p className="mt-3 opacity-90">Spins today: {spinsToday}</p>
 
-        {/* ADMIN */}
+        {/* ADMIN PANEL */}
         {isAdmin && (
           <div className="w-full max-w-3xl mt-8 p-5 bg-black/30 border border-white/20 rounded-2xl">
             <h2 className="text-xl font-bold mb-3">Admin Panel</h2>
