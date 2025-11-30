@@ -2,18 +2,34 @@
 
 import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
-import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
+import {
+  BrowserProvider,
+  Contract,
+  formatEther,
+  parseEther,
+} from "ethers";
+import WalletConnectProvider from "@walletconnect/ethereum-provider";
+import NeynarClient from "@neynar/nodejs-sdk";
 
-// Fix TypeScript
+// Fix TS
 declare global {
   interface Window {
     ethereum?: any;
+    parent?: any;
   }
 }
 
-const ADMIN_ENS = "elize.base.eth";
-const ADMIN_FALLBACK = "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
+const BASE_CHAIN_ID = 8453;
 
+// Farcaster login
+const NEYNAR_API_KEY = process.env.NEXT_PUBLIC_NEYNAR_KEY || "";
+
+// ENS admin
+const ADMIN_ENS = "elize.base.eth";
+const ADMIN_FALLBACK =
+  "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
+
+// Wheel segments
 const SEGMENTS = [
   "JACKPOT",
   "HODL",
@@ -29,20 +45,21 @@ const SEGMENTS = [
   "Wen?",
 ];
 
-const MONEY_SEGMENTS = new Set([2, 5, 8, 10]); // "ETH" positions
+const MONEY_SEGMENTS = new Set([2, 5, 8, 10]);
 const JACKPOT_INDEX = 0;
 
+// Contract
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
-
 const CONTRACT_ABI = [
   "function spinFree()",
   "function spinPaid() payable",
+  "function spinPaidSponsored() payable",
   "function getPoolBalance() view returns (uint256)",
   "function freeSpinAvailable(address) view returns (bool)",
   "function withdraw40()",
   "function stopGame()",
   "function emergencyWithdrawAll()",
-  "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)"
+  "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)",
 ];
 
 const SPIN_PRICE = parseEther("0.00042");
@@ -61,12 +78,16 @@ export default function Page() {
   const [prizePool, setPrizePool] = useState<string>("X.XXXX");
   const [isFreeAvailable, setIsFreeAvailable] = useState<boolean | null>(null);
 
-  const [adminAddressResolved, setAdminAddressResolved] = useState<string | null>(null);
+  const [adminAddressResolved, setAdminAddressResolved] = useState<
+    string | null
+  >(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [recentWins, setRecentWins] = useState<
     { player: string; tier: number; amount: string; message: string }[]
   >([]);
+
+  const [fcUser, setFcUser] = useState<any>(null);
 
   /* Load spins */
   useEffect(() => {
@@ -76,11 +97,41 @@ export default function Page() {
     if (saved) setSpinsToday(parseInt(saved));
   }, []);
 
-  /* Provider init */
+  /* Farcaster login via Neynar */
+  const loginWithFarcaster = async () => {
+    try {
+      const client = new NeynarClient(NEYNAR_API_KEY);
+      const res = await client.fetchActiveUser();
+      setFcUser(res);
+    } catch (e) {
+      console.error("Farcaster login failed", e);
+    }
+  };
+
+  /* Provider init (Base forced) */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.ethereum) setProvider(new BrowserProvider(window.ethereum));
-  }, []);
+    if (!provider && window.ethereum) {
+      (async () => {
+        try {
+          const chainHex = await window.ethereum.request({
+            method: "eth_chainId",
+          });
+          const chain = parseInt(chainHex, 16);
+
+          if (chain !== BASE_CHAIN_ID) {
+            try {
+              await window.ethereum.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: "0x2105" }],
+              });
+            } catch {}
+          }
+
+          setProvider(new BrowserProvider(window.ethereum));
+        } catch {}
+      })();
+    }
+  }, [provider]);
 
   /* Admin + contract data */
   useEffect(() => {
@@ -92,21 +143,22 @@ export default function Page() {
         await loadRecentWins();
       }
 
-      // ENS resolution
       try {
         const resolved = await provider.resolveName(ADMIN_ENS);
-        setAdminAddressResolved(resolved ? resolved.toLowerCase() : ADMIN_FALLBACK);
+        setAdminAddressResolved(
+          resolved ? resolved.toLowerCase() : ADMIN_FALLBACK
+        );
       } catch {
         setAdminAddressResolved(ADMIN_FALLBACK);
       }
 
-      // Admin check
       if (address && adminAddressResolved) {
         const lower = address.toLowerCase();
-        setIsAdmin(lower === adminAddressResolved || lower === ADMIN_FALLBACK);
+        setIsAdmin(
+          lower === adminAddressResolved || lower === ADMIN_FALLBACK
+        );
       }
 
-      // Free spin availability
       if (address && CONTRACT_ADDRESS) await checkFreeSpin();
     };
 
@@ -119,13 +171,66 @@ export default function Page() {
     localStorage.setItem(key, n.toString());
   };
 
+  /* Wallet connection with Base enforced + WalletConnect fallback */
   const connectWallet = async () => {
-    if (!window.ethereum) return alert("No wallet detected");
     try {
-      const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
-      if (accs?.length) setAddress(accs[0]);
-    } catch (e) {
-      console.error(e);
+      let ethProvider = null;
+
+      if (!window.ethereum) {
+        const wc = await WalletConnectProvider.init({
+          projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID!,
+          chains: [BASE_CHAIN_ID],
+          rpcMap: {
+            [BASE_CHAIN_ID]: "https://mainnet.base.org",
+          },
+          optionalChains: [BASE_CHAIN_ID],
+          showQrModal: true,
+        });
+
+        await wc.connect();
+        ethProvider = wc;
+      } else {
+        ethProvider = window.ethereum;
+
+        const hex = await ethProvider.request({ method: "eth_chainId" });
+        const ch = parseInt(hex, 16);
+
+        if (ch !== BASE_CHAIN_ID) {
+          try {
+            await ethProvider.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: "0x2105" }],
+            });
+          } catch (err: any) {
+            if (err.code === 4902) {
+              await ethProvider.request({
+                method: "wallet_addEthereumChain",
+                params: [
+                  {
+                    chainId: "0x2105",
+                    chainName: "Base",
+                    rpcUrls: ["https://mainnet.base.org"],
+                    blockExplorerUrls: ["https://basescan.org"],
+                  },
+                ],
+              });
+            }
+          }
+        }
+
+        await ethProvider.request({ method: "eth_requestAccounts" });
+      }
+
+      if (ethProvider) {
+        const bp = new BrowserProvider(ethProvider);
+        setProvider(bp);
+
+        const accs = await bp.send("eth_requestAccounts", []);
+        if (accs?.length) setAddress(accs[0]);
+      }
+    } catch (err) {
+      console.error("Wallet connect failed", err);
+      alert("Wallet connect failed");
     }
   };
 
@@ -141,7 +246,6 @@ export default function Page() {
     return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
   };
 
-  /* Refresh pool */
   const refreshPool = async () => {
     try {
       const c = getReadContract();
@@ -172,7 +276,7 @@ export default function Page() {
       const logs = await provider.getLogs({
         address: CONTRACT_ADDRESS,
         fromBlock: 0,
-        toBlock: "latest"
+        toBlock: "latest",
       });
 
       const parsed: typeof recentWins = [];
@@ -181,13 +285,11 @@ export default function Page() {
         try {
           const pl = c.interface.parseLog(log);
           if (pl.name === "SpinResult") {
-            const tier = Number(pl.args.tier);
-            const amount = BigInt(pl.args.amountWei);
             parsed.push({
               player: pl.args.player,
-              tier,
-              amount: formatEther(amount),
-              message: pl.args.message
+              tier: Number(pl.args.tier),
+              amount: formatEther(BigInt(pl.args.amountWei)),
+              message: pl.args.message,
             });
           }
         } catch {}
@@ -196,6 +298,15 @@ export default function Page() {
       setRecentWins(parsed.slice(0, 25));
     } catch (e) {
       console.error("Event load error", e);
+    }
+  };
+
+  /* Paymaster support */
+  const trySponsoredSpin = async (c: any) => {
+    try {
+      return await c.spinPaidSponsored({ value: SPIN_PRICE });
+    } catch {
+      return null;
     }
   };
 
@@ -216,19 +327,23 @@ export default function Page() {
       setShowPopup(false);
       setShowConfetti(false);
 
-      // Wait for user confirmation
-      const tx = useFree
-        ? await c.spinFree()
-        : await c.spinPaid({ value: SPIN_PRICE });
+      let tx;
 
-      // Now user has confirmed → start spin animation
+      if (useFree) {
+        tx = await c.spinFree();
+      } else {
+        const sponsored = await trySponsoredSpin(c);
+        if (sponsored) tx = sponsored;
+        else tx = await c.spinPaid({ value: SPIN_PRICE });
+      }
+
       setResult("Spinning...");
 
       const fullTurns = 8 + Math.random() * 4;
-      const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
+      const endRotation =
+        rotation + fullTurns * 360 + Math.random() * 360;
       setRotation(endRotation);
 
-      // Wait for on-chain result
       const receipt = await tx.wait();
 
       let display = "Spin complete!";
@@ -267,7 +382,7 @@ export default function Page() {
   };
 
   const handleSpinClick = () => {
-    const useFree = spinsToday === 0 && (isFreeAvailable !== false);
+    const useFree = spinsToday === 0 && isFreeAvailable !== false;
     void spinOnChain(useFree);
   };
 
@@ -280,7 +395,7 @@ export default function Page() {
         transform: `rotate(${rotation}deg)`,
         transition: isSpinning
           ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
-          : "none"
+          : "none",
       }}
     >
       {Array.from({ length: 12 }).map((_, i) => {
@@ -332,17 +447,15 @@ export default function Page() {
     </svg>
   );
 
-  /* UI helpers */
   const shortAddr = address
     ? address.slice(0, 6) + "..." + address.slice(-4)
     : "";
 
-  const buttonLabel =
-    isSpinning
-      ? "SPINNING..."
-      : spinsToday === 0 && isFreeAvailable !== false
-      ? "FREE SPIN"
-      : "SPIN 0.00042 ETH";
+  const buttonLabel = isSpinning
+    ? "SPINNING..."
+    : spinsToday === 0 && isFreeAvailable !== false
+    ? "FREE SPIN"
+    : "SPIN 0.00042 ETH";
 
   return (
     <>
@@ -355,18 +468,27 @@ export default function Page() {
         />
       )}
 
-      {/* RESULT POPUP */}
+      {/* POPUP */}
       {showPopup && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
           <div className="bg-black p-6 rounded-2xl border border-white/20 text-center w-80">
-            <h2 className="text-2xl font-bold mb-4 text-yellow-300">{result}</h2>
+            <h2 className="text-2xl font-bold mb-4 text-yellow-300">
+              {result}
+            </h2>
 
+            {/* Farcaster Miniapp Share */}
             <button
-              onClick={() =>
-                window.open(
-                  `https://warpcast.com/~/compose?text=${encodeURIComponent(result || "")}`
-                )
-              }
+              onClick={() => {
+                if (window.parent) {
+                  window.parent.postMessage(
+                    {
+                      type: "farcaster-share",
+                      message: result || "",
+                    },
+                    "*"
+                  );
+                }
+              }}
               className="w-full py-3 bg-purple-500 rounded-xl font-bold mb-4"
             >
               Share on Farcaster
@@ -384,49 +506,69 @@ export default function Page() {
 
       <div
         className="
-          min-h-screen flex flex-col items-center p-6
-          bg-gradient-to-b from-black via-[#0a0014] to-black
-          text-white
-        "
+        min-h-screen flex flex-col items-center p-6
+        bg-gradient-to-b from-black via-[#0a0014] to-black
+        text-white
+      "
       >
         {/* Header */}
         <div className="w-full max-w-3xl flex justify-between mb-4">
-          <h1 className="text-3xl font-black tracking-wide">BASED WHEEL</h1>
+          <h1 className="text-3xl font-black tracking-wide">
+            BASED WHEEL
+          </h1>
+
           <button
             onClick={connectWallet}
             className="
-              px-4 py-2 rounded-xl 
-              bg-black/60 border border-white/20
-              hover:bg-white hover:text-black transition
-            "
+          px-4 py-2 rounded-xl 
+          bg-black/60 border border-white/20
+          hover:bg-white hover:text-black transition
+        "
           >
             {address ? shortAddr : "Connect Wallet"}
           </button>
         </div>
 
-        <p className="opacity-80 mb-4">1 free spin/day • 0.00042 ETH after</p>
+        {/* Farcaster login */}
+        {!fcUser && (
+          <button
+            onClick={loginWithFarcaster}
+            className="mb-4 px-4 py-2 bg-purple-500 rounded-xl font-bold"
+          >
+            Login with Farcaster
+          </button>
+        )}
+
+        {fcUser && (
+          <p className="mb-4 opacity-90">
+            Logged in as @{fcUser.username}
+          </p>
+        )}
+
+        <p className="opacity-80 mb-4">
+          1 free spin/day • 0.00042 ETH after
+        </p>
 
         {/* Wheel */}
         <div
           className="
-            relative w-72 h-72 mb-8 mx-auto
-            transition-transform duration-300
-            hover:scale-105 hover:rotate-1
-            drop-shadow-[0_0_25px_rgba(255,200,255,0.4)]
-          "
+        relative w-72 h-72 mb-8 mx-auto
+        transition-transform duration-300
+        hover:scale-105 hover:rotate-1
+        drop-shadow-[0_0_25px_rgba(255,200,255,0.4)]
+      "
         >
           {renderWheel()}
           <div
             className="
-              absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0
-              border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent
-              border-t-[24px] border-t-yellow-400
-              animate-pulse drop-shadow-[0_0_12px_rgba(255,255,0,0.8)]
-            "
+          absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0
+          border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent
+          border-t-[24px] border-t-yellow-400
+          animate-pulse drop-shadow-[0_0_12px_rgba(255,255,0,0.8)]
+        "
           />
         </div>
 
-        {/* Result preview */}
         {result && !showPopup && (
           <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center drop-shadow">
             {result}
@@ -441,18 +583,18 @@ export default function Page() {
           disabled={isSpinning || !CONTRACT_ADDRESS}
           onClick={handleSpinClick}
           className="
-            px-10 py-4 text-xl font-black rounded-3xl
-            bg-yellow-400 text-black shadow-xl
-            hover:bg-yellow-300 transition
-            disabled:opacity-40
-          "
+        px-10 py-4 text-xl font-black rounded-3xl
+        bg-yellow-400 text-black shadow-xl
+        hover:bg-yellow-300 transition
+        disabled:opacity-40
+      "
         >
           {CONTRACT_ADDRESS ? buttonLabel : "CONTRACT NOT DEPLOYED"}
         </button>
 
         <p className="mt-3 opacity-90">Spins today: {spinsToday}</p>
 
-        {/* ADMIN PANEL */}
+        {/* Admin Panel */}
         {isAdmin && (
           <div className="w-full max-w-3xl mt-8 p-5 bg-black/30 border border-white/20 rounded-2xl">
             <h2 className="text-xl font-bold mb-3">Admin Panel</h2>
@@ -497,7 +639,7 @@ export default function Page() {
           </div>
         )}
 
-        {/* RECENT WINS */}
+        {/* Recent Wins */}
         <div className="w-full max-w-3xl mt-10 p-4 bg-black/20 border border-white/10 rounded-2xl">
           <h2 className="text-xl font-bold mb-3">Recent Wins</h2>
 
@@ -516,7 +658,8 @@ export default function Page() {
                     {w.amount} ETH
                   </div>
                   <div className="text-sm opacity-80">
-                    {w.player.slice(0, 6)}...{w.player.slice(-4)} – {w.message}
+                    {w.player.slice(0, 6)}...{w.player.slice(-4)} –{" "}
+                    {w.message}
                   </div>
                 </div>
               ))}
