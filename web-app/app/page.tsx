@@ -9,7 +9,6 @@ import WalletConnectProvider from "@walletconnect/ethereum-provider";
 declare global {
   interface Window {
     ethereum?: any;
-    parent?: any;
   }
 }
 
