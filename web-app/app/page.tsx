@@ -309,8 +309,15 @@ export default function Page() {
 
       // 1. Send transaction
       const tx = useFree
-        ? await c.spinFree()
-        : await c.spinPaid({ value: SPIN_PRICE });
+  ? await c.spinFree({
+      gasLimit: 200000n
+    })
+  : await c.spinPaid({
+      value: SPIN_PRICE.toString(),
+      gasLimit: 200000n
+    });
+
+
 
       // 2. Immediately animate wheel
       setResult("Spinning…");
