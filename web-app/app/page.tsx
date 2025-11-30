@@ -83,31 +83,24 @@ export default function Page() {
     if (!provider) return;
 
     const init = async () => {
-      // Always refresh pool & recent events if contract exists
       if (CONTRACT_ADDRESS) {
         await refreshPool();
         await loadRecentWins();
       }
 
-      // ENS resolution
       try {
         const resolved = await provider.resolveName(ADMIN_ENS);
-        if (resolved) {
-          setAdminAddressResolved(resolved.toLowerCase());
-        } else {
-          setAdminAddressResolved(ADMIN_FALLBACK); // fallback
-        }
+        if (resolved) setAdminAddressResolved(resolved.toLowerCase());
+        else setAdminAddressResolved(ADMIN_FALLBACK);
       } catch {
         setAdminAddressResolved(ADMIN_FALLBACK);
       }
 
-      // Check admin
       if (address && adminAddressResolved) {
         const lower = address.toLowerCase();
         setIsAdmin(lower === adminAddressResolved || lower === ADMIN_FALLBACK);
       }
 
-      // Check free spin
       if (address && CONTRACT_ADDRESS) await checkFreeSpin();
     };
 
@@ -120,12 +113,8 @@ export default function Page() {
     localStorage.setItem(key, num.toString());
   };
 
-  /* Wallet connect */
   const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("No wallet detected.");
-      return;
-    }
+    if (!window.ethereum) return alert("No wallet detected.");
     try {
       const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
       if (accs?.length) setAddress(accs[0]);
@@ -134,7 +123,6 @@ export default function Page() {
     }
   };
 
-  /* Contract helpers */
   const getReadContract = () => {
     if (!provider || !CONTRACT_ADDRESS) return null;
     return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
@@ -206,7 +194,6 @@ export default function Page() {
     }
   };
 
-  /* Spin */
   const spinOnChain = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
@@ -222,7 +209,6 @@ export default function Page() {
       setResult(null);
       setShowConfetti(false);
 
-      // Visual spin
       const fullTurns = 6 + Math.random() * 4;
       const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
       setRotation(endRotation);
@@ -269,7 +255,6 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
-  /* Wheel rendering */
   const renderWheel = () => (
     <svg
       viewBox="0 0 100 100"
@@ -332,6 +317,7 @@ export default function Page() {
     </svg>
   );
 
+  /* --- UI --- */
   const shortAddr = address
     ? address.slice(0, 6) + "..." + address.slice(-4)
     : "";
@@ -355,9 +341,12 @@ export default function Page() {
 
       <div className="min-h-screen flex flex-col items-center p-6">
 
-        {/* Top */}
-        <div className="bg-red-500 text-white p-4">TESTI — pitäisi näkyä punaisena!</div>
+        {/* 🔥 TAILWIND TESTI - KERRO MILTÄ NÄYTTÄÄ */}
+        <div className="bg-red-500 text-white p-4 rounded-xl font-bold mb-4">
+          TESTI — tämän pitäisi olla PUNAINEN laatikko
+        </div>
 
+        {/* Top */}
         <div className="w-full max-w-3xl flex justify-between mb-4">
           <h1 className="text-3xl font-black">BASED WHEEL</h1>
           <button
