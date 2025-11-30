@@ -356,6 +356,8 @@ export default function Page() {
       <div className="min-h-screen flex flex-col items-center p-6">
 
         {/* Top */}
+        <div className="bg-red-500 text-white p-4">TESTI — pitäisi näkyä punaisena!</div>
+
         <div className="w-full max-w-3xl flex justify-between mb-4">
           <h1 className="text-3xl font-black">BASED WHEEL</h1>
           <button
