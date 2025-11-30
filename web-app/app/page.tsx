@@ -18,11 +18,10 @@ const MOTIVATIONS = [
   "GM legend",
   "HODL",
   "LFG",
-  "Stay Based",
-  "You will make it",
-  "Wen lambo? TODAY",
-  "Based & redpilled",
-  "Just ship it"
+  "WAGMI",
+  "Wen?",
+  "Based",
+  "ship it"
 ];
 
 const MONEY_SEGMENTS = new Set([2, 5, 8, 11, 14, 17, 20, 23]);
