@@ -255,10 +255,15 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
+  /* 🎡 PREMIUM WHEEL */
   const renderWheel = () => (
     <svg
       viewBox="0 0 100 100"
-      className="w-full h-full"
+      className="
+        w-full h-full 
+        drop-shadow-[0_0_25px_rgba(255,0,200,0.45)]
+        brightness-110
+      "
       style={{
         transform: `rotate(${rotation}deg)`,
         transition: isSpinning
@@ -287,8 +292,10 @@ export default function Page() {
           : "hsl(330,80%,55%)";
 
         const mid = start + 7.5;
-        const lx = 50 + 28 * Math.cos((Math.PI * mid) / 180);
-        const ly = 50 + 28 * Math.sin((Math.PI * mid) / 180);
+        const lx = 50 + 27 * Math.cos((Math.PI * mid) / 180);
+        const ly = 50 + 27 * Math.sin((Math.PI * mid) / 180);
+
+        const motivation = MOTIVATIONS[i % MOTIVATIONS.length];
 
         return (
           <g key={i}>
@@ -302,13 +309,13 @@ export default function Page() {
               x={lx}
               y={ly}
               fill={isJackpot ? "black" : "white"}
-              fontSize={isJackpot ? "5" : "4"}
+              fontSize={isJackpot ? "5" : "3.7"}
               fontWeight="bold"
               textAnchor="middle"
               dominantBaseline="middle"
               transform={`rotate(${mid + 90} ${lx} ${ly})`}
             >
-              {isJackpot ? "JACKPOT" : isMoney ? "ETH" : "TEXT"}
+              {isJackpot ? "JACKPOT" : isMoney ? "ETH" : motivation}
             </text>
           </g>
         );
@@ -335,23 +342,27 @@ export default function Page() {
           width={typeof window !== "undefined" ? window.innerWidth : 300}
           height={typeof window !== "undefined" ? window.innerHeight : 300}
           recycle={false}
-          numberOfPieces={600}
+          numberOfPieces={700}
         />
       )}
 
-      <div className="min-h-screen flex flex-col items-center p-6">
-
-        {/* 🔥 TAILWIND TESTI - KERRO MILTÄ NÄYTTÄÄ */}
-        <div className="bg-red-500 text-white p-4 rounded-xl font-bold mb-4">
-          TESTI — tämän pitäisi olla PUNAINEN laatikko
-        </div>
-
-        {/* Top */}
+      <div
+        className="
+          min-h-screen flex flex-col items-center p-6
+          bg-gradient-to-b from-black via-[#0a0014] to-black
+          text-white
+        "
+      >
+        {/* Header */}
         <div className="w-full max-w-3xl flex justify-between mb-4">
-          <h1 className="text-3xl font-black">BASED WHEEL</h1>
+          <h1 className="text-3xl font-black tracking-wide">BASED WHEEL</h1>
           <button
             onClick={connectWallet}
-            className="px-4 py-2 bg-black/60 rounded-xl border border-white/20"
+            className="
+              px-4 py-2 rounded-xl 
+              bg-black/60 border border-white/20
+              hover:bg-white hover:text-black transition
+            "
           >
             {address ? shortAddr : "Connect Wallet"}
           </button>
@@ -360,16 +371,27 @@ export default function Page() {
         <p className="opacity-80 mb-4">1 free spin/day • 0.00042 ETH after</p>
 
         {/* Wheel */}
-        <div className="relative w-72 h-72 mb-8 mx-auto">
+        <div
+          className="
+            relative w-72 h-72 mb-8 mx-auto
+            transition-transform duration-300
+            hover:scale-105 hover:rotate-1
+            drop-shadow-[0_0_25px_rgba(255,200,255,0.35)]
+          "
+        >
           {renderWheel()}
-          <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 
-            border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent 
-            border-t-[24px] border-t-yellow-400"
+          <div
+            className="
+              absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0
+              border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent
+              border-t-[24px] border-t-yellow-400
+              animate-pulse drop-shadow-[0_0_12px_rgba(255,255,0,0.8)]
+            "
           />
         </div>
 
         {result && (
-          <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center">
+          <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center drop-shadow">
             {result}
           </h2>
         )}
@@ -381,7 +403,12 @@ export default function Page() {
         <button
           disabled={isSpinning || !CONTRACT_ADDRESS}
           onClick={handleSpinClick}
-          className="px-10 py-4 text-xl bg-yellow-400 text-black rounded-3xl font-black shadow-xl disabled:opacity-40"
+          className="
+            px-10 py-4 text-xl font-black rounded-3xl
+            bg-yellow-400 text-black shadow-xl
+            hover:bg-yellow-300 transition
+            disabled:opacity-40
+          "
         >
           {CONTRACT_ADDRESS ? buttonLabel : "CONTRACT NOT DEPLOYED"}
         </button>
@@ -394,7 +421,6 @@ export default function Page() {
             <h2 className="text-xl font-bold mb-3">Admin Panel</h2>
 
             <div className="flex gap-3 flex-wrap">
-
               <button
                 onClick={async () => {
                   try {
@@ -460,7 +486,6 @@ export default function Page() {
             </div>
           )}
         </div>
-
       </div>
     </>
   );
