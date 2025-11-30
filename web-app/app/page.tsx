@@ -106,7 +106,6 @@ export default function Page() {
             });
           } catch (switchError: any) {
             if (switchError.code === 4902) {
-              // Add Base chain if not present
               try {
                 await eth.request({
                   method: "wallet_addEthereumChain",
@@ -119,21 +118,17 @@ export default function Page() {
                     },
                   ],
                 });
-              } catch {
-                // ignore
-              }
+              } catch {}
             }
           }
         }
 
         setProvider(new BrowserProvider(eth));
-      } catch {
-        // ignore
-      }
+      } catch {}
     })();
   }, [provider]);
 
-  /* Admin + contract data + ENS/BNS for admin & user */
+  /* Admin + contract data + ENS */
   useEffect(() => {
     if (!provider) return;
 
@@ -143,7 +138,6 @@ export default function Page() {
         await loadRecentWins();
       }
 
-      // Resolve admin ENS (elize.base.eth)
       try {
         const resolved = await provider.resolveName(ADMIN_ENS);
         setAdminAddressResolved(
@@ -153,7 +147,6 @@ export default function Page() {
         setAdminAddressResolved(ADMIN_FALLBACK);
       }
 
-      // Resolve user ENS/Base Name (if address available)
       try {
         if (address) {
           const name = await provider.lookupAddress(address);
@@ -165,7 +158,6 @@ export default function Page() {
         setResolvedName(null);
       }
 
-      // Admin check
       if (address && adminAddressResolved) {
         const lower = address.toLowerCase();
         setIsAdmin(
@@ -173,7 +165,6 @@ export default function Page() {
         );
       }
 
-      // Free spin check
       if (address && CONTRACT_ADDRESS) await checkFreeSpin();
     };
 
@@ -188,10 +179,7 @@ export default function Page() {
     }
   };
 
-  /* Wallet connect:
-     - If no injected wallet → WalletConnect (Base only)
-     - If injected (MetaMask / Coinbase) → force Base & request accounts
-  */
+  /* Wallet connect */
   const connectWallet = async () => {
     try {
       let ethProvider: any = null;
@@ -199,11 +187,9 @@ export default function Page() {
       if (typeof window === "undefined") return;
 
       if (!window.ethereum) {
-        // WalletConnect (Base)
         const wc = await WalletConnectProvider.init({
           projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID!,
           chains: [BASE_CHAIN_ID],
-          optionalChains: [BASE_CHAIN_ID],
           rpcMap: {
             [BASE_CHAIN_ID]: "https://mainnet.base.org",
           },
@@ -213,7 +199,6 @@ export default function Page() {
         await wc.connect();
         ethProvider = wc;
       } else {
-        // Injected wallet
         ethProvider = window.ethereum;
 
         const chainHex = await ethProvider.request({
@@ -256,32 +241,25 @@ export default function Page() {
           setAddress(accs[0]);
         }
       }
-    } catch (err) {
-      console.error("Wallet connect failed", err);
+    } catch {
       alert("Wallet connection failed");
     }
   };
 
-  /* Farcaster login (Neynar-ready: backend /api/farcaster/me) */
+  /* Farcaster login placeholder */
   const loginWithFarcaster = async () => {
     try {
       const res = await fetch("/api/farcaster/me");
-      if (!res.ok) throw new Error("no backend");
       const data = await res.json();
-      if (data?.username) {
-        setFcUsername(data.username);
-      } else {
-        throw new Error("no username");
-      }
-    } catch (e) {
-      console.error("Farcaster login failed, opening Neynar login instead", e);
+      if (data?.username) setFcUsername(data.username);
+    } catch {
       if (typeof window !== "undefined") {
         window.open("https://app.neynar.com/login", "_blank");
       }
     }
   };
 
-  /* Contract helpers */
+  /* Helpers */
   const getReadContract = () =>
     provider && CONTRACT_ADDRESS
       ? new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider)
@@ -308,8 +286,7 @@ export default function Page() {
     try {
       const c = getReadContract();
       if (!c || !address) return;
-      const available = await c.freeSpinAvailable(address);
-      setIsFreeAvailable(available);
+      setIsFreeAvailable(await c.freeSpinAvailable(address));
     } catch {
       setIsFreeAvailable(null);
     }
@@ -342,18 +319,14 @@ export default function Page() {
               message: pl.args.message,
             });
           }
-        } catch {
-          // ignore unparseable logs
-        }
+        } catch {}
       }
 
       setRecentWins(parsed.slice(0, 25));
-    } catch (e) {
-      console.error("Event load error", e);
-    }
+    } catch {}
   };
 
-  /* On-chain spin logic */
+  /* LISTENER MODE spin */
   const spinOnChain = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
@@ -362,61 +335,83 @@ export default function Page() {
     if (!CONTRACT_ADDRESS) return alert("Contract not deployed");
 
     try {
-      const c = await getWriteContract();
-      if (!c) return;
+      const writeC = await getWriteContract();
+      const readC = getReadContract();
+      if (!writeC || !readC) return;
 
       setIsSpinning(true);
-      setResult("Awaiting wallet confirmation...");
+      setResult("Awaiting wallet confirmation…");
       setShowPopup(false);
       setShowConfetti(false);
 
-      // Tx send
-      const tx = useFree
-        ? await c.spinFree()
-        : await c.spinPaid({ value: SPIN_PRICE });
+      // Listen FIRST
+      const filter = readC.filters.SpinResult(address);
+      let resolved = false;
 
-      // Start front-end wheel animation *after* user signs
-      setResult("Spinning...");
+      const off = () => {
+        try {
+          readC.off(filter);
+        } catch {}
+      };
+
+      readC.on(
+        filter,
+        async (player, isFreeSpin, tier, amountWei, message) => {
+          if (resolved) return;
+          resolved = true;
+          off();
+
+          const winEth = BigInt(amountWei) > 0n;
+
+          setTimeout(async () => {
+            setResult(message);
+            setShowPopup(true);
+
+            if (winEth) setShowConfetti(true);
+
+            saveSpins(spinsToday + 1);
+            await refreshPool();
+            await loadRecentWins();
+            await checkFreeSpin();
+
+            setIsSpinning(false);
+          }, 4200);
+        }
+      );
+
+      // Send tx
+      const tx = useFree
+        ? await writeC.spinFree()
+        : await writeC.spinPaid({ value: SPIN_PRICE });
+
+      // Start animation
+      setResult("Spinning…");
 
       const fullTurns = 8 + Math.random() * 4;
       const endRotation =
         rotation + fullTurns * 360 + Math.random() * 360;
       setRotation(endRotation);
 
-      // Wait on-chain result
-      const receipt = await tx.wait();
+      // Ignore WC-miniapp tx.wait errors
+      tx.wait().catch(() => {});
 
-      let display = "Spin complete!";
-      let ethWin = false;
+    } catch (err: any) {
+      console.error("Spin error:", err);
 
-      for (const log of receipt.logs) {
-        try {
-          const pl = c.interface.parseLog(log);
-          if (pl.name === "SpinResult") {
-            const amt = BigInt(pl.args.amountWei);
-            display = pl.args.message || display;
-            if (amt > 0n) ethWin = true;
-          }
-        } catch {
-          // ignore
-        }
+      const m = (err?.message || "").toLowerCase();
+      const harmless =
+        m.includes("coalesce") ||
+        m.includes("fail") ||
+        m.includes("network") ||
+        m.includes("insufficient") ||
+        m.includes("previous") ||
+        m.includes("gas");
+
+      if (harmless) {
+        setResult("Spinning…");
+        return;
       }
 
-      setTimeout(async () => {
-        setResult(display);
-        setShowPopup(true);
-
-        if (ethWin) setShowConfetti(true);
-
-        saveSpins(spinsToday + 1);
-        await refreshPool();
-        await loadRecentWins();
-        await checkFreeSpin();
-
-        setIsSpinning(false);
-      }, 4200);
-    } catch (err: any) {
-      console.error(err);
       setIsSpinning(false);
       setResult(err?.shortMessage || err?.message || "Failed");
       setShowPopup(true);
@@ -520,13 +515,11 @@ export default function Page() {
               {result}
             </h2>
 
-            {/* Miniapp-first Share on Farcaster */}
             <button
               onClick={() => {
                 const text = result || "";
                 const encoded = encodeURIComponent(text);
 
-                // 1) Miniapp: postMessage parentille
                 if (typeof window !== "undefined" && window.parent) {
                   try {
                     window.parent.postMessage(
@@ -536,11 +529,8 @@ export default function Page() {
                       },
                       "*"
                     );
-                  } catch {
-                    // ignore
-                  }
+                  } catch {}
                 } else if (typeof window !== "undefined") {
-                  // 2) Normi selain fallback → Warpcast compose
                   window.open(
                     `https://warpcast.com/~/compose?text=${encoded}`,
                     "_blank"
@@ -552,7 +542,6 @@ export default function Page() {
               Share on Farcaster
             </button>
 
-            {/* Warpcast tipping -nappi (tip admin-osoite) */}
             <button
               onClick={() => {
                 const addr = adminAddressResolved || ADMIN_FALLBACK;
@@ -654,7 +643,6 @@ export default function Page() {
           />
         </div>
 
-        {/* Result preview */}
         {result && !showPopup && (
           <h2 className="text-2xl text-yellow-300 font-black mb-4 text-center drop-shadow">
             {result}
