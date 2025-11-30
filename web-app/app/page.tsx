@@ -6,6 +6,7 @@ import {
   BrowserProvider,
   Contract,
   JsonRpcProvider,
+  Interface,
   formatEther,
   parseEther,
 } from "ethers";
@@ -290,8 +291,8 @@ export default function Page() {
   };
 
   // ---------------------------
-  // SPIN FUNCTION
-  // ---------------------------
+  // SPIN FUNCTION (RAW TX)
+// ---------------------------
   const spin = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
@@ -299,27 +300,31 @@ export default function Page() {
     }
 
     try {
-      const c = await getWriteContract();
-      if (!c) return;
+      if (!provider) return;
 
       setIsSpinning(true);
       setShowPopup(false);
       setShowConfetti(false);
       setResult("Awaiting wallet confirmation…");
 
-      // 1. Send transaction
-      const tx = useFree
-  ? await c.spinFree({
-      gasLimit: 200000n
-    })
-  : await c.spinPaid({
-      value: SPIN_PRICE.toString(),
-      gasLimit: 200000n
-    });
+      const signer = await provider.getSigner();
+      const iface = new Interface(CONTRACT_ABI);
 
+      // 1. Encode calldata
+      const calldata = iface.encodeFunctionData(
+        useFree ? "spinFree" : "spinPaid",
+        []
+      );
 
+      // 2. Send raw transaction
+      const tx = await signer.sendTransaction({
+        to: CONTRACT_ADDRESS,
+        data: calldata,
+        ...(useFree ? {} : { value: SPIN_PRICE }),
+        gasLimit: 200000n,
+      });
 
-      // 2. Immediately animate wheel
+      // 3. Immediately animate wheel
       setResult("Spinning…");
 
       const fullTurns = 8 + Math.random() * 4;
@@ -327,7 +332,7 @@ export default function Page() {
         rotation + fullTurns * 360 + Math.random() * 360;
       setRotation(endRotation);
 
-      // 3. Wait for on-chain result
+      // 4. Wait for on-chain result
       const receipt = await tx.wait();
 
       let display = "Spin complete!";
@@ -335,7 +340,7 @@ export default function Page() {
 
       for (const log of receipt.logs) {
         try {
-          const pl = c.interface.parseLog(log);
+          const pl = iface.parseLog(log);
           if (pl.name === "SpinResult") {
             display = pl.args.message;
             if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
@@ -370,7 +375,7 @@ export default function Page() {
 
   const handleSpin = () => {
     const useFree = spinsToday === 0 && isFreeAvailable !== false;
-    spin(useFree);
+    void spin(useFree);
   };
 
   // ---------------------------
@@ -514,12 +519,12 @@ export default function Page() {
             )}
           </div>
 
-          <button
-            onClick={connectWallet}
-            className="px-4 py-2 rounded-xl bg-black/60 border border-white/20 hover:bg-white hover:text-black transition"
-          >
-            {address ? displayUser : "Connect Wallet"}
-          </button>
+        <button
+          onClick={connectWallet}
+          className="px-4 py-2 rounded-xl bg-black/60 border border-white/20 hover:bg-white hover:text-black transition"
+        >
+          {address ? displayUser : "Connect Wallet"}
+        </button>
         </div>
 
         <p className="opacity-80 mb-4">
