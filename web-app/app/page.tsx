@@ -255,74 +255,73 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
-  /* 🎡 PREMIUM WHEEL */
-  const renderWheel = () => (
-    <svg
-      viewBox="0 0 100 100"
-      className="
-        w-full h-full 
-        drop-shadow-[0_0_25px_rgba(255,0,200,0.45)]
-        brightness-110
-      "
-      style={{
-        transform: `rotate(${rotation}deg)`,
-        transition: isSpinning
-          ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
-          : "none"
-      }}
-    >
-      {Array.from({ length: 24 }).map((_, i) => {
-        const start = i * 15;
-        const end = start + 15;
+ const renderWheel = () => (
+  <svg
+    viewBox="0 0 100 100"
+    className="w-full h-full"
+    style={{
+      transform: `rotate(${rotation}deg)`,
+      transition: isSpinning
+        ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
+        : "none"
+    }}
+  >
+    {Array.from({ length: 12 }).map((_, i) => {
+      const start = i * 30;
+      const end = start + 30;
 
-        const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
-        const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
-        const x2 = 50 + 42 * Math.cos((Math.PI * end) / 180);
-        const y2 = 50 + 42 * Math.sin((Math.PI * end) / 180);
+      const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
+      const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
+      const x2 = 50 + 42 * Math.cos((Math.PI * end) / 180);
+      const y2 = 50 + 42 * Math.sin((Math.PI * end) / 180);
 
-        const isJackpot = i === JACKPOT_INDEX;
-        const isMoney = MONEY_SEGMENTS.has(i);
+      const isJackpot = i === JACKPOT_INDEX;
+      const isMoney = MONEY_SEGMENTS.has(i);
 
-        const fill = isJackpot
-          ? "#FFD700"
-          : isMoney
-          ? "hsl(90,80%,55%)"
-          : i % 2
-          ? "hsl(300,80%,55%)"
-          : "hsl(330,80%,55%)";
+      const fill = isJackpot
+        ? "#FFD700"
+        : isMoney
+        ? "hsl(90,80%,55%)"
+        : i % 2
+        ? "hsl(300,80%,55%)"
+        : "hsl(330,80%,55%)";
 
-        const mid = start + 7.5;
-        const lx = 50 + 27 * Math.cos((Math.PI * mid) / 180);
-        const ly = 50 + 27 * Math.sin((Math.PI * mid) / 180);
+      const mid = start + 15;
+      const lx = 50 + 33 * Math.cos((Math.PI * mid) / 180);
+      const ly = 50 + 33 * Math.sin((Math.PI * mid) / 180);
 
-        const motivation = MOTIVATIONS[i % MOTIVATIONS.length];
+      const text = isJackpot
+        ? "JACKPOT"
+        : isMoney
+        ? "ETH"
+        : MOTIVATIONS[i % MOTIVATIONS.length];
 
-        return (
-          <g key={i}>
-            <path
-              d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
-              fill={fill}
-              stroke="#000"
-              strokeWidth="0.5"
-            />
-            <text
-              x={lx}
-              y={ly}
-              fill={isJackpot ? "black" : "white"}
-              fontSize={isJackpot ? "5" : "3.7"}
-              fontWeight="bold"
-              textAnchor="middle"
-              dominantBaseline="middle"
-              transform={`rotate(${mid + 90} ${lx} ${ly})`}
-            >
-              {isJackpot ? "JACKPOT" : isMoney ? "ETH" : motivation}
-            </text>
-          </g>
-        );
-      })}
-      <circle cx="50" cy="50" r="10" fill="#111" />
-    </svg>
-  );
+      return (
+        <g key={i}>
+          <path
+            d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
+            fill={fill}
+            stroke="#000"
+            strokeWidth="0.5"
+          />
+          <text
+            x={lx}
+            y={ly}
+            fill={isJackpot ? "black" : "white"}
+            fontSize={isJackpot ? "6" : "5"}
+            fontWeight="bold"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${mid + 90} ${lx} ${ly})`}
+          >
+            {text}
+          </text>
+        </g>
+      );
+    })}
+    <circle cx="50" cy="50" r="10" fill="#111" />
+  </svg>
+);
 
   /* --- UI --- */
   const shortAddr = address
