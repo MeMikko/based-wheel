@@ -24,7 +24,8 @@ const MOTIVATIONS = [
   "ship it"
 ];
 
-const MONEY_SEGMENTS = new Set([2, 5, 8, 11, 14, 17, 20, 23]);
+// 12 segment wheel → money indices must be 12–friendly
+const MONEY_SEGMENTS = new Set([2, 5, 7, 10]);
 const JACKPOT_INDEX = 0;
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
@@ -112,10 +113,41 @@ export default function Page() {
     localStorage.setItem(key, num.toString());
   };
 
+  /* 🔥 FIXED — ENSURE WALLET IS ON BASE MAINNET */
   const connectWallet = async () => {
     if (!window.ethereum) return alert("No wallet detected.");
+
     try {
-      const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
+      // Switch to Base
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0x2105" }]
+      });
+    } catch (switchError) {
+      // Add Base if missing
+      try {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [
+            {
+              chainId: "0x2105",
+              chainName: "Base",
+              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+              rpcUrls: ["https://mainnet.base.org"],
+              blockExplorerUrls: ["https://base.blockscout.com"]
+            }
+          ]
+        });
+      } catch (addError) {
+        console.error("Failed adding Base:", addError);
+        return alert("Unable to switch to Base network.");
+      }
+    }
+
+    try {
+      const accs = await window.ethereum.request({
+        method: "eth_requestAccounts"
+      });
       if (accs?.length) setAddress(accs[0]);
     } catch (e) {
       console.error(e);
@@ -243,9 +275,17 @@ export default function Page() {
 
         setIsSpinning(false);
       }, 4200);
+
     } catch (err: any) {
+      console.error("TX ERROR:", err);
+      const msg =
+        err?.shortMessage ||
+        err?.data?.message ||
+        err?.message ||
+        "Transaction failed";
+
       setIsSpinning(false);
-      setResult(err?.shortMessage || err?.message || "Failed");
+      setResult(msg);
     }
   };
 
@@ -254,73 +294,73 @@ export default function Page() {
     void spinOnChain(useFree);
   };
 
- const renderWheel = () => (
-  <svg
-    viewBox="0 0 100 100"
-    className="w-full h-full"
-    style={{
-      transform: `rotate(${rotation}deg)`,
-      transition: isSpinning
-        ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
-        : "none"
-    }}
-  >
-    {Array.from({ length: 12 }).map((_, i) => {
-      const start = i * 30;
-      const end = start + 30;
+  const renderWheel = () => (
+    <svg
+      viewBox="0 0 100 100"
+      className="w-full h-full"
+      style={{
+        transform: `rotate(${rotation}deg)`,
+        transition: isSpinning
+          ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
+          : "none"
+      }}
+    >
+      {Array.from({ length: 12 }).map((_, i) => {
+        const start = i * 30;
+        const end = start + 30;
 
-      const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
-      const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
-      const x2 = 50 + 42 * Math.cos((Math.PI * end) / 180);
-      const y2 = 50 + 42 * Math.sin((Math.PI * end) / 180);
+        const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
+        const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
+        const x2 = 50 + 42 * Math.cos((Math.PI * end) / 180);
+        const y2 = 50 + 42 * Math.sin((Math.PI * end) / 180);
 
-      const isJackpot = i === JACKPOT_INDEX;
-      const isMoney = MONEY_SEGMENTS.has(i);
+        const isJackpot = i === JACKPOT_INDEX;
+        const isMoney = MONEY_SEGMENTS.has(i);
 
-      const fill = isJackpot
-        ? "#FFD700"
-        : isMoney
-        ? "hsl(90,80%,55%)"
-        : i % 2
-        ? "hsl(300,80%,55%)"
-        : "hsl(330,80%,55%)";
+        const fill = isJackpot
+          ? "#FFD700"
+          : isMoney
+          ? "hsl(90,80%,55%)"
+          : i % 2
+          ? "hsl(300,80%,55%)"
+          : "hsl(330,80%,55%)";
 
-      const mid = start + 15;
-      const lx = 50 + 33 * Math.cos((Math.PI * mid) / 180);
-      const ly = 50 + 33 * Math.sin((Math.PI * mid) / 180);
+        const mid = start + 15;
+        const lx = 50 + 33 * Math.cos((Math.PI * mid) / 180);
+        const ly = 50 + 33 * Math.sin((Math.PI * mid) / 180);
 
-      const text = isJackpot
-        ? "JACKPOT"
-        : isMoney
-        ? "ETH"
-        : MOTIVATIONS[i % MOTIVATIONS.length];
+        const text = isJackpot
+          ? "JACKPOT"
+          : isMoney
+          ? "ETH"
+          : MOTIVATIONS[i % MOTIVATIONS.length];
 
-      return (
-        <g key={i}>
-          <path
-            d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
-            fill={fill}
-            stroke="#000"
-            strokeWidth="0.5"
-          />
-          <text
-            x={lx}
-            y={ly}
-            fill={isJackpot ? "black" : "white"}
-            fontSize={isJackpot ? "6" : "5"}
-            fontWeight="bold"
-            textAnchor="middle"
-            dominantBaseline="middle"
-            transform={`rotate(${mid + 90} ${lx} ${ly})`}
-          >
-            {text}
-          </text>
-        </g>
-      );
-    })}
-    <circle cx="50" cy="50" r="10" fill="#111" />
-  </svg>
-);
+        return (
+          <g key={i}>
+            <path
+              d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
+              fill={fill}
+              stroke="#000"
+              strokeWidth="0.5"
+            />
+            <text
+              x={lx}
+              y={ly}
+              fill={isJackpot ? "black" : "white"}
+              fontSize={isJackpot ? "6" : "5"}
+              fontWeight="bold"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              transform={`rotate(${mid + 90} ${lx} ${ly})`}
+            >
+              {text}
+            </text>
+          </g>
+        );
+      })}
+      <circle cx="50" cy="50" r="10" fill="#111" />
+    </svg>
+  );
 
   /* --- UI --- */
   const shortAddr = address
