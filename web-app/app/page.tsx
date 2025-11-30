@@ -126,24 +126,28 @@ export default function Page() {
     }
   };
 
-  // -------------------------
-  // CONTRACT HELPERS
-// -------------------------
-const getReadContract = () =>
-  new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider);
+  // Add TS type for Contract to avoid "does not exist on BaseContract"
+type WheelContract = {
+  spinFree: () => Promise<any>;
+  spinPaid: (opts: { value: bigint }) => Promise<any>;
+  getPoolBalance: () => Promise<bigint>;
+  freeSpinAvailable: (addr: string) => Promise<boolean>;
+};
 
-const getWriteContract = async () => {
+// CONTRACT HELPERS
+// -------------------------
+const getReadContract = (): Contract & WheelContract =>
+  new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider) as any;
+
+const getWriteContract = async (): Promise<(Contract & WheelContract) | null> => {
   if (!provider) return null;
 
-  // Signer from user's wallet
   const signer = await provider.getSigner();
-
-  // Create contract bound to signer (for signing)
   const signedContract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 
-  // OVERRIDE provider → ensure tx ALWAYS goes through Base RPC
-  return signedContract.connect(baseRpcProvider);
+  return signedContract.connect(baseRpcProvider) as any;
 };
+
 
   // -------------------------
   // REFRESH DATA
