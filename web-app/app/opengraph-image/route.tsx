@@ -31,7 +31,3 @@ export async function GET(req: Request) {
     }
   );
 }
-
-export default function OGImageRoute() {
-  return null;
-}
