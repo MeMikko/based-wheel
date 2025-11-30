@@ -128,21 +128,22 @@ export default function Page() {
 
   // -------------------------
   // CONTRACT HELPERS
-  // -------------------------
-  const getReadContract = () =>
-    new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider);
+// -------------------------
+const getReadContract = () =>
+  new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider);
 
-  const getWriteContract = async () => {
-    if (!provider) return null;
-    const signer = await provider.getSigner();
+const getWriteContract = async () => {
+  if (!provider) return null;
 
-    // attach signer to Base RPC
-    return new Contract(
-      CONTRACT_ADDRESS,
-      CONTRACT_ABI,
-      signer.connect(baseRpcProvider)
-    );
-  };
+  // Signer from user's wallet
+  const signer = await provider.getSigner();
+
+  // Create contract bound to signer (for signing)
+  const signedContract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+
+  // OVERRIDE provider → ensure tx ALWAYS goes through Base RPC
+  return signedContract.connect(baseRpcProvider);
+};
 
   // -------------------------
   // REFRESH DATA
