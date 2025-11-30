@@ -1,16 +1,19 @@
-export const metadata = {
+import "./globals.css";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
   title: "Based Wheel",
-  description: "Money printer spin wheel on Base"
+  description: "Degenerate spin wheel on Base",
 };
 
 export default function RootLayout({
-  children
+  children,
 }: {
   children: React.ReactNode;
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="bg-black text-white min-h-screen">{children}</body>
     </html>
   );
 }
