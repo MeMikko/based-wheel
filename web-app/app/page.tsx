@@ -4,27 +4,38 @@ import { useEffect, useState } from "react";
 import Confetti from "confetti-react";
 import {
   BrowserProvider,
-  JsonRpcProvider,
   Contract,
+  JsonRpcProvider,
   formatEther,
   parseEther,
 } from "ethers";
 import WalletConnectProvider from "@walletconnect/ethereum-provider";
 
-// Globals
-declare global {
-  interface Window {
-    ethereum?: any;
-  }
-}
-
+// ---------------------------
+// CONSTANTS
+// ---------------------------
 const BASE_CHAIN_ID = 8453;
+const BASE_CHAIN_HEX = "0x2105";
+
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!;
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC!;
 
 const ADMIN_ENS = "elize.base.eth";
 const ADMIN_FALLBACK =
   "0xaBE04f37EfFDC17FccDAdC6A08c8ebdD5bbEb558".toLowerCase();
+
+const SPIN_PRICE = parseEther("0.00042");
+
+const CONTRACT_ABI = [
+  "function spinFree()",
+  "function spinPaid() payable",
+  "function getPoolBalance() view returns (uint256)",
+  "function freeSpinAvailable(address) view returns (bool)",
+  "function withdraw40()",
+  "function stopGame()",
+  "function emergencyWithdrawAll()",
+  "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)",
+];
 
 const SEGMENTS = [
   "JACKPOT",
@@ -44,65 +55,68 @@ const SEGMENTS = [
 const MONEY_SEGMENTS = new Set([2, 5, 8, 10]);
 const JACKPOT_INDEX = 0;
 
-const CONTRACT_ABI = [
-  "function spinFree()",
-  "function spinPaid() payable",
-  "function getPoolBalance() view returns (uint256)",
-  "function freeSpinAvailable(address) view returns (bool)",
-  "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)",
-];
-
-const SPIN_PRICE = parseEther("0.00042");
-
-// 🔵 ALWAYS use Base RPC for reads (miniapp safe)
-const baseRpcProvider = new JsonRpcProvider(BASE_RPC, BASE_CHAIN_ID);
+// Global TS
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 
 export default function Page() {
+  // ---------------------------
+  // STATE
+  // ---------------------------
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [resolvedName, setResolvedName] = useState<string | null>(null);
 
   const [spinsToday, setSpinsToday] = useState(0);
-  const [isSpinning, setIsSpinning] = useState(false);
+  const [isFreeAvailable, setIsFreeAvailable] = useState<boolean | null>(null);
+
   const [rotation, setRotation] = useState(0);
+  const [isSpinning, setIsSpinning] = useState(false);
 
   const [result, setResult] = useState<string | null>(null);
   const [showPopup, setShowPopup] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
 
   const [prizePool, setPrizePool] = useState("X.XXXX");
-  const [isFreeAvailable, setIsFreeAvailable] = useState<boolean | null>(null);
+  const [recentWins, setRecentWins] = useState<
+    { player: string; tier: number; amount: string; message: string }[]
+  >([]);
 
   const [adminAddressResolved, setAdminAddressResolved] =
     useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  const [recentWins, setRecentWins] = useState<
-    { player: string; tier: number; amount: string; message: string }[]
-  >([]);
+  const baseRpcProvider = new JsonRpcProvider(BASE_RPC);
 
-  // Load daily spins
+  // ---------------------------
+  // LOAD SPINS TODAY
+  // ---------------------------
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const key = `spins_${new Date().toDateString()}`;
     const saved = localStorage.getItem(key);
     if (saved) setSpinsToday(parseInt(saved));
   }, []);
 
   const saveSpins = (n: number) => {
-    const key = `spins_${new Date().toDateString()}`;
     setSpinsToday(n);
-    localStorage.setItem(key, n.toString());
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`spins_${new Date().toDateString()}`, String(n));
+    }
   };
 
-  // -------------------------
-  // CONNECT WALLET
-  // -------------------------
+  // ---------------------------
+  // INIT WALLET PROVIDER
+  // ---------------------------
   const connectWallet = async () => {
     try {
-      let eth: any = null;
+      let ethProvider: any = null;
 
       if (!window.ethereum) {
-        // WalletConnect for Base only
+        // WalletConnect fallback
         const wc = await WalletConnectProvider.init({
           projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID!,
           chains: [BASE_CHAIN_ID],
@@ -110,48 +124,124 @@ export default function Page() {
           showQrModal: true,
         });
         await wc.connect();
-        eth = wc;
+        ethProvider = wc;
       } else {
-        eth = window.ethereum;
-        await eth.request({ method: "eth_requestAccounts" });
+        // Injected wallet
+        ethProvider = window.ethereum;
+
+        const chainHex = await ethProvider.request({ method: "eth_chainId" });
+        const chain = parseInt(chainHex, 16);
+
+        if (chain !== BASE_CHAIN_ID) {
+          try {
+            await ethProvider.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: BASE_CHAIN_HEX }],
+            });
+          } catch (e: any) {
+            if (e.code === 4902) {
+              await ethProvider.request({
+                method: "wallet_addEthereumChain",
+                params: [
+                  {
+                    chainId: BASE_CHAIN_HEX,
+                    chainName: "Base",
+                    rpcUrls: [BASE_RPC],
+                    blockExplorerUrls: ["https://basescan.org"],
+                  },
+                ],
+              });
+            }
+          }
+        }
+
+        await ethProvider.request({ method: "eth_requestAccounts" });
       }
 
-      const bp = new BrowserProvider(eth);
+      const bp = new BrowserProvider(ethProvider);
       setProvider(bp);
 
-      const accs: string[] = await bp.send("eth_requestAccounts", []);
-      if (accs?.length) setAddress(accs[0]);
-    } catch (e) {
-      console.error("wallet connect error", e);
+      const accounts: string[] = await bp.send("eth_requestAccounts", []);
+      if (accounts?.length) setAddress(accounts[0]);
+    } catch (err) {
+      console.error("Wallet connect error", err);
+      alert("Wallet connection failed");
     }
   };
 
-  // Add TS type for Contract to avoid "does not exist on BaseContract"
-type WheelContract = {
-  spinFree: () => Promise<any>;
-  spinPaid: (opts: { value: bigint }) => Promise<any>;
-  getPoolBalance: () => Promise<bigint>;
-  freeSpinAvailable: (addr: string) => Promise<boolean>;
-};
+  // ---------------------------
+  // RESOLVE ENS / ADMIN / FREE SPIN
+  // ---------------------------
+  useEffect(() => {
+    if (!provider) return;
 
-// CONTRACT HELPERS
-// -------------------------
-const getReadContract = (): Contract & WheelContract =>
-  new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider) as any;
+    const run = async () => {
+      try {
+        if (CONTRACT_ADDRESS) {
+          await refreshPool();
+          await loadRecentWins();
+        }
 
-const getWriteContract = async (): Promise<(Contract & WheelContract) | null> => {
-  if (!provider) return null;
+        // Admin ENS
+        try {
+          const resolved = await provider.resolveName(ADMIN_ENS);
+          setAdminAddressResolved(
+            resolved ? resolved.toLowerCase() : ADMIN_FALLBACK
+          );
+        } catch {
+          setAdminAddressResolved(ADMIN_FALLBACK);
+        }
 
-  const signer = await provider.getSigner();
-  const signedContract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+        // User ENS / BaseName
+        try {
+          if (address) {
+            const name = await provider.lookupAddress(address);
+            setResolvedName(name || null);
+          } else {
+            setResolvedName(null);
+          }
+        } catch {
+          setResolvedName(null);
+        }
 
-  return signedContract.connect(baseRpcProvider) as any;
-};
+        // Admin check
+        if (address && adminAddressResolved) {
+          setIsAdmin(
+            address.toLowerCase() === adminAddressResolved ||
+              address.toLowerCase() === ADMIN_FALLBACK
+          );
+        }
 
+        // Free spin
+        if (address) {
+          const c = getReadContract();
+          const free = await c.freeSpinAvailable(address);
+          setIsFreeAvailable(free);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
 
-  // -------------------------
-  // REFRESH DATA
-  // -------------------------
+    run();
+  }, [provider, address, adminAddressResolved]);
+
+  // ---------------------------
+  // CONTRACT HELPERS
+  // ---------------------------
+  const getReadContract = () =>
+    new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, baseRpcProvider);
+
+  const getWriteContract = async () => {
+    if (!provider) return null;
+    const signer = await provider.getSigner();
+    // signer provider lähettää tx → oikea chain
+    return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+  };
+
+  // ---------------------------
+  // POOL
+  // ---------------------------
   const refreshPool = async () => {
     try {
       const c = getReadContract();
@@ -162,82 +252,47 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
     }
   };
 
-  const checkFreeSpin = async () => {
-    if (!address) return;
-    try {
-      const c = getReadContract();
-      const avail = await c.freeSpinAvailable(address);
-      setIsFreeAvailable(avail);
-    } catch {
-      setIsFreeAvailable(null);
-    }
-  };
-
-  // Load recent wins
+  // ---------------------------
+  // RECENT WINS (last 5000 blocks)
+  // ---------------------------
   const loadRecentWins = async () => {
     try {
       const c = getReadContract();
+      const latest = await baseRpcProvider.getBlockNumber();
+      const from = Math.max(0, latest - 5000);
+
       const logs = await baseRpcProvider.getLogs({
         address: CONTRACT_ADDRESS,
-        fromBlock: 0,
+        fromBlock: from,
         toBlock: "latest",
       });
 
-      const arr: any[] = [];
+      const parsed: typeof recentWins = [];
+
       for (const log of logs.reverse()) {
         try {
-          const p = c.interface.parseLog(log);
-          if (p.name === "SpinResult") {
-            arr.push({
-              player: p.args.player,
-              tier: Number(p.args.tier),
-              amount: formatEther(p.args.amountWei),
-              message: p.args.message,
+          const pl = c.interface.parseLog(log);
+          if (pl.name === "SpinResult") {
+            parsed.push({
+              player: pl.args.player,
+              tier: Number(pl.args.tier),
+              amount: formatEther(BigInt(pl.args.amountWei)),
+              message: pl.args.message,
             });
           }
         } catch {}
       }
-      setRecentWins(arr.slice(0, 25));
-    } catch (e) {
-      console.error("recent win load failed:", e);
+
+      setRecentWins(parsed.slice(0, 25));
+    } catch (err) {
+      console.error("recent win load failed:", err);
     }
   };
 
-  // Resolve ENS & admin check
-  useEffect(() => {
-    (async () => {
-      if (!provider || !address) return;
-
-      try {
-        const name = await provider.lookupAddress(address);
-        setResolvedName(name || null);
-      } catch {
-        setResolvedName(null);
-      }
-
-      try {
-        const resolved = await baseRpcProvider.resolveName(ADMIN_ENS);
-        setAdminAddressResolved(
-          resolved ? resolved.toLowerCase() : ADMIN_FALLBACK
-        );
-      } catch {
-        setAdminAddressResolved(ADMIN_FALLBACK);
-      }
-
-      if (adminAddressResolved) {
-        setIsAdmin(address.toLowerCase() === adminAddressResolved);
-      }
-
-      await refreshPool();
-      await loadRecentWins();
-      await checkFreeSpin();
-    })();
-  }, [provider, address, adminAddressResolved]);
-
-  // -------------------------
-  // LISTENER MODE SPIN
-  // -------------------------
-  const spinOnChain = async (useFree: boolean) => {
+  // ---------------------------
+  // SPIN FUNCTION
+  // ---------------------------
+  const spin = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
       if (!address) return;
@@ -245,94 +300,75 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
 
     try {
       const c = await getWriteContract();
-      const readC = getReadContract();
-      if (!c || !readC) return;
+      if (!c) return;
 
       setIsSpinning(true);
-      setResult("Awaiting wallet confirmation…");
       setShowPopup(false);
       setShowConfetti(false);
+      setResult("Awaiting wallet confirmation…");
 
-      // 1. Listen BEFORE sending tx
-      let resolved = false;
-      const filter = readC.filters.SpinResult(address);
+      // 1. Send transaction
+      const tx = useFree
+        ? await c.spinFree()
+        : await c.spinPaid({ value: SPIN_PRICE });
 
-      const handler = async (
-        player: string,
-        isFree: boolean,
-        tier: number,
-        amountWei: bigint,
-        message: string
-      ) => {
-        if (resolved) return;
-        resolved = true;
-
-        readC.off(filter, handler);
-
-        const win = amountWei > 0n;
-
-        // Finish after wheel stops
-        setTimeout(async () => {
-          setResult(message);
-          setShowPopup(true);
-          if (win) setShowConfetti(true);
-
-          saveSpins(spinsToday + 1);
-          await refreshPool();
-          await loadRecentWins();
-          await checkFreeSpin();
-
-          setIsSpinning(false);
-        }, 4200);
-      };
-
-      readC.on(filter, handler);
-
-      // 2. Send transaction
-      const tx = useFree ? await c.spinFree() : await c.spinPaid({ value: SPIN_PRICE });
-
-      // 3. Start animation immediately
+      // 2. Immediately animate wheel
       setResult("Spinning…");
+
       const fullTurns = 8 + Math.random() * 4;
-      const endRotation = rotation + fullTurns * 360 + Math.random() * 360;
+      const endRotation =
+        rotation + fullTurns * 360 + Math.random() * 360;
       setRotation(endRotation);
 
-      // We DO NOT WAIT — miniapp safe:
-      tx.wait().catch(() => {});
+      // 3. Wait for on-chain result
+      const receipt = await tx.wait();
 
-    } catch (err: any) {
-      console.error("Spin error:", err);
+      let display = "Spin complete!";
+      let ethWin = false;
 
-      const m = (err?.message || "").toLowerCase();
-      const harmless =
-        m.includes("coalesce") ||
-        m.includes("unexpected") ||
-        m.includes("network") ||
-        m.includes("gas") ||
-        m.includes("estimate") ||
-        m.includes("transaction") ||
-        err?.code === -32603;
-
-      if (harmless) {
-        setResult("Spinning…");
-        return;
+      for (const log of receipt.logs) {
+        try {
+          const pl = c.interface.parseLog(log);
+          if (pl.name === "SpinResult") {
+            display = pl.args.message;
+            if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
+          }
+        } catch {}
       }
 
+      setTimeout(async () => {
+        setResult(display);
+        setShowPopup(true);
+
+        if (ethWin) setShowConfetti(true);
+
+        saveSpins(spinsToday + 1);
+        await refreshPool();
+        await loadRecentWins();
+
+        if (address) {
+          const c2 = getReadContract();
+          setIsFreeAvailable(await c2.freeSpinAvailable(address));
+        }
+
+        setIsSpinning(false);
+      }, 4200);
+    } catch (err: any) {
+      console.error("Spin error:", err);
       setIsSpinning(false);
-      setResult(err?.message || "Failed");
+      setResult(err?.message || "Transaction failed");
       setShowPopup(true);
     }
   };
 
-  const handleSpinClick = () => {
-    const useFree =
-      spinsToday === 0 && (isFreeAvailable === true || isFreeAvailable === null);
-    spinOnChain(useFree);
+  const handleSpin = () => {
+    const useFree = spinsToday === 0 && isFreeAvailable !== false;
+    spin(useFree);
   };
 
-  // -------------------------
-  // SVG WHEEL
-  // -------------------------
+  // ---------------------------
+  // WHEEL RENDER
+  // ---------------------------
   const renderWheel = () => (
     <svg
       viewBox="0 0 100 100"
@@ -348,10 +384,10 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
         const start = i * 30;
         const end = start + 30;
 
-        const x1 = 50 + 42 * Math.cos((Math.PI * start) / 180);
-        const y1 = 50 + 42 * Math.sin((Math.PI * start) / 180);
-        const x2 = 50 + 42 * Math.cos((Math.PI * end) / 180);
-        const y2 = 50 + 42 * Math.sin((Math.PI * end) / 180);
+        const x1 = 50 + 42 * Math.cos((start * Math.PI) / 180);
+        const y1 = 50 + 42 * Math.sin((start * Math.PI) / 180);
+        const x2 = 50 + 42 * Math.cos((end * Math.PI) / 180);
+        const y2 = 50 + 42 * Math.sin((end * Math.PI) / 180);
 
         const isJackpot = i === JACKPOT_INDEX;
         const isMoney = MONEY_SEGMENTS.has(i);
@@ -363,8 +399,8 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
           : "#FF44CC";
 
         const mid = start + 15;
-        const lx = 50 + 34 * Math.cos((Math.PI * mid) / 180);
-        const ly = 50 + 34 * Math.sin((Math.PI * mid) / 180);
+        const lx = 50 + 34 * Math.cos((mid * Math.PI) / 180);
+        const ly = 50 + 34 * Math.sin((mid * Math.PI) / 180);
 
         return (
           <g key={i}>
@@ -393,29 +429,33 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
     </svg>
   );
 
-  // -------------------------
-  // UI
-  // -------------------------
   const shortAddr = address
-    ? address.slice(0, 6) + "..." + address.slice(-4)
+    ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : "";
-  const displayUser = resolvedName || shortAddr || "";
-
   const buttonLabel = isSpinning
     ? "SPINNING..."
     : spinsToday === 0 && isFreeAvailable !== false
     ? "FREE SPIN"
     : "SPIN 0.00042 ETH";
 
+  const displayUser = resolvedName || shortAddr;
+
+  // ---------------------------
+  // RENDER
+  // ---------------------------
   return (
     <>
       {showConfetti && (
-        <Confetti width={window.innerWidth} height={window.innerHeight} />
+        <Confetti
+          width={typeof window !== "undefined" ? window.innerWidth : 400}
+          height={typeof window !== "undefined" ? window.innerHeight : 400}
+          recycle={false}
+          numberOfPieces={700}
+        />
       )}
 
-      {/* RESULT POPUP */}
       {showPopup && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
           <div className="bg-black p-6 rounded-2xl border border-white/20 text-center w-80">
             <h2 className="text-2xl font-bold mb-4 text-yellow-300">
               {result}
@@ -423,11 +463,20 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
 
             <button
               onClick={() => {
-                const txt = encodeURIComponent(result || "");
-                window.open(
-                  `https://warpcast.com/~/compose?text=${txt}`,
-                  "_blank"
-                );
+                const text = result || "";
+                const encoded = encodeURIComponent(text);
+
+                if (window.parent) {
+                  window.parent.postMessage(
+                    { type: "farcaster-share", message: text },
+                    "*"
+                  );
+                } else {
+                  window.open(
+                    `https://warpcast.com/~/compose?text=${encoded}`,
+                    "_blank"
+                  );
+                }
               }}
               className="w-full py-3 bg-purple-500 rounded-xl font-bold mb-4"
             >
@@ -445,61 +494,126 @@ const getWriteContract = async (): Promise<(Contract & WheelContract) | null> =>
       )}
 
       <div className="min-h-screen flex flex-col items-center p-6 bg-black text-white">
-        <h1 className="text-3xl font-black mb-4">BASED WHEEL</h1>
+        {/* HEADER */}
+        <div className="w-full max-w-3xl flex justify-between items-center mb-4">
+          <div>
+            <h1 className="text-3xl font-black">BASED WHEEL</h1>
+            {adminAddressResolved && (
+              <p className="text-xs opacity-70">
+                House: {ADMIN_ENS} (
+                {adminAddressResolved.slice(0, 6)}...
+                {adminAddressResolved.slice(-4)})
+              </p>
+            )}
+          </div>
 
-        <button
-          onClick={connectWallet}
-          className="px-4 py-2 rounded-xl bg-white/10 border border-white/20"
-        >
-          {address ? displayUser : "Connect Wallet"}
-        </button>
+          <button
+            onClick={connectWallet}
+            className="px-4 py-2 rounded-xl bg-black/60 border border-white/20 hover:bg-white hover:text-black transition"
+          >
+            {address ? displayUser : "Connect Wallet"}
+          </button>
+        </div>
 
-        <p className="opacity-80 mt-3 mb-4">
+        <p className="opacity-80 mb-4">
           1 free spin/day • 0.00042 ETH after • Base mainnet
         </p>
 
         {/* WHEEL */}
-        <div className="relative w-72 h-72 mb-8 mx-auto">
+        <div className="relative w-72 h-72 mb-8 mx-auto hover:scale-105 hover:rotate-1 duration-300">
           {renderWheel()}
-          <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent border-t-[24px] border-t-yellow-400" />
+          <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 
+          border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent 
+          border-t-[24px] border-t-yellow-400 animate-pulse" />
         </div>
 
         {result && !showPopup && (
-          <h2 className="text-2xl text-yellow-300 font-black mb-4">
-            {result}
-          </h2>
+          <h2 className="text-2xl text-yellow-300 font-black mb-4">{result}</h2>
         )}
 
         <div className="text-xl font-bold mb-2">
-          Prize pool: {prizePool} ETH
+          Prize Pool: {prizePool} ETH
         </div>
 
         <button
           disabled={isSpinning}
-          onClick={handleSpinClick}
-          className="px-10 py-4 text-xl font-black rounded-3xl bg-yellow-400 text-black disabled:opacity-40"
+          onClick={handleSpin}
+          className="px-10 py-4 text-xl font-black rounded-3xl bg-yellow-400 text-black shadow-xl disabled:opacity-30"
         >
           {buttonLabel}
         </button>
 
-        <p className="mt-3 opacity-80">Spins today: {spinsToday}</p>
+        <p className="mt-2 opacity-90">Spins today: {spinsToday}</p>
+
+        {/* ADMIN PANEL */}
+        {isAdmin && (
+          <div className="w-full max-w-3xl mt-8 p-5 bg-black/30 rounded-2xl border">
+            <h2 className="text-xl font-bold mb-3">Admin Panel</h2>
+
+            <div className="flex gap-3">
+              <button
+                onClick={async () => {
+                  try {
+                    const c = await getWriteContract();
+                    const tx = await c!.withdraw40();
+                    await tx.wait();
+                    alert("40% withdrawn");
+                    refreshPool();
+                  } catch (err: any) {
+                    alert(err?.message || "Error");
+                  }
+                }}
+                className="px-4 py-2 bg-yellow-400 text-black rounded-xl font-bold"
+              >
+                Withdraw 40%
+              </button>
+
+              <button
+                onClick={async () => {
+                  if (!confirm("STOP GAME + WITHDRAW ALL?")) return;
+                  try {
+                    const c = await getWriteContract();
+                    const tx1 = await c!.stopGame();
+                    await tx1.wait();
+                    const tx2 = await c!.emergencyWithdrawAll();
+                    await tx2.wait();
+                    alert("Game stopped & funds withdrawn");
+                  } catch (err: any) {
+                    alert(err?.message || "Error");
+                  }
+                }}
+                className="px-4 py-2 bg-red-500 text-white rounded-xl font-bold"
+              >
+                Emergency Withdraw ALL
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* RECENT WINS */}
-        <div className="w-full max-w-3xl mt-10 p-4 bg-white/5 border border-white/10 rounded-2xl">
+        <div className="w-full max-w-3xl mt-10 p-4 bg-black/20 rounded-2xl border">
           <h2 className="text-xl font-bold mb-3">Recent Wins</h2>
-          {recentWins.map((w, i) => (
-            <div
-              key={i}
-              className="p-2 bg-black/40 rounded-xl border border-white/10 mb-2"
-            >
-              <div className="font-bold text-yellow-300">
-                {w.amount} ETH
-              </div>
-              <div className="text-sm opacity-80">
-                {w.player.slice(0, 6)}...{w.player.slice(-4)} — {w.message}
-              </div>
+
+          {recentWins.length === 0 ? (
+            <p className="opacity-80">No recent wins</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {recentWins.map((w, i) => (
+                <div
+                  key={i}
+                  className="p-2 bg-black/40 rounded-xl border border-white/10"
+                >
+                  <div className="font-bold text-yellow-300">
+                    {w.amount} ETH
+                  </div>
+                  <div className="text-sm opacity-80">
+                    {w.player.slice(0, 6)}...{w.player.slice(-4)} –{" "}
+                    {w.message}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       </div>
     </>
