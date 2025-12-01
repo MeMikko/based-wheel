@@ -335,197 +335,189 @@ export default function Page() {
   };
 
   // ---------------------------
-  // SPIN FUNCTION (RAW JSON-RPC + TIER-POHJAINEN ANIMAATIO)
-  // ---------------------------
-  const spin = async (useFree: boolean) => {
-    if (!address) {
-      await connectWallet();
-      if (!address) return;
-    }
+// SPIN FUNCTION (BASE-RPC FIX + TIER LOGIC + ANIMATION)
+// ---------------------------
+const spin = async (useFree: boolean) => {
+  if (!address) {
+    await connectWallet();
+    if (!address) return;
+  }
 
-    try {
-      if (!provider) return;
+  try {
+    if (!provider) return;
 
-      setIsSpinning(true);
-      setShowPopup(false);
-      setShowConfetti(false);
-      setResult("Awaiting wallet confirmation…");
+    setIsSpinning(true);
+    setShowPopup(false);
+    setShowConfetti(false);
+    setResult("Awaiting wallet confirmation…");
 
-      const signer = await provider.getSigner();
-      const userAddress = await signer.getAddress();
-      const iface = new Interface(CONTRACT_ABI);
+    const signer = await provider.getSigner();
+    const iface = new Interface(CONTRACT_ABI);
 
-      // 1. Encode calldata
-      const calldata = iface.encodeFunctionData(
-        useFree ? "spinFree" : "spinPaid",
-        []
-      );
+    // 1. Encode calldata
+    const calldata = iface.encodeFunctionData(
+      useFree ? "spinFree" : "spinPaid",
+      []
+    );
 
-      // 2. Rakennetaan raw JSON-RPC tx → lompakko hoitaa gasin & signauksen
-      const unsignedTx: any = {
-        from: userAddress,
-        to: CONTRACT_ADDRESS,
-        data: calldata,
-        ...(useFree
-          ? {}
-          : { value: "0x" + SPIN_PRICE.toString(16) }), // hex string
-      };
+    // 2. IMPORTANT FIX: signer MUST use Base RPC
+    const rpcSigner = signer.connect(baseRpcProvider);
 
-      const txHash: string = await provider.send("eth_sendTransaction", [
-        unsignedTx,
-      ]);
+    // 3. Send actual transaction (no eth_sendTransaction anymore)
+    const tx = await rpcSigner.sendTransaction({
+      to: CONTRACT_ADDRESS,
+      data: calldata,
+      ...(useFree ? {} : { value: SPIN_PRICE }),
+      gasLimit: 200000n,
+    });
 
-      // 3. Odotetaan kuitti ketjulta (revertit näkyy täällä)
-      const receipt = await provider.waitForTransaction(txHash);
+    // 4. Wait for confirmation
+    const receipt = await tx.wait();
 
-      let display = "Spin complete!";
-      let ethWin = false;
-      let tier = 0;
-      let motivational = false;
+    let display = "Spin complete!";
+    let ethWin = false;
+    let tier = 0;
+    let motivational = false;
 
-      for (const log of receipt.logs) {
-        try {
-          const pl = iface.parseLog(log);
-          if (pl.name === "SpinResult") {
-            tier = Number(pl.args.tier);
-            const msg: string = pl.args.message;
+    // Parse SpinResult event
+    for (const log of receipt.logs) {
+      try {
+        const pl = iface.parseLog(log);
+        if (pl.name === "SpinResult") {
+          tier = Number(pl.args.tier);
+          const msg = pl.args.message as string;
 
-            if (msg.startsWith("Motivational only")) {
-              motivational = true;
-            } else {
-              display = msg;
-            }
-
-            if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
+          if (msg.startsWith("Motivational")) {
+            motivational = true;
+          } else {
+            display = msg;
           }
-        } catch {}
-      }
 
-      // 4. Valitaan segmentti sopimuksen tierin mukaan
-      let targetIndex: number;
-
-      if (tier === 4) {
-        // jackpot
-        targetIndex = JACKPOT_INDEX;
-      } else if (tier === 0) {
-        // ei rahaa → jokin tyhjä slotti
-        const random =
-          TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
-        targetIndex = random;
-      } else {
-        // kaikki maksavat tierit → rahaslotit
-        const random =
-          MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
-        targetIndex = random;
-      }
-
-      // 5. Käynnistetään animaatio
-      setResult("Spinning…");
-      animateToSegment(targetIndex);
-
-      // 6. Animaation jälkeen popup
-      setTimeout(async () => {
-        const finalText = motivational ? getRandomMotivational() : display;
-
-        setResult(finalText);
-        setShowPopup(true);
-
-        if (ethWin) setShowConfetti(true);
-
-        saveSpins(spinsToday + 1);
-        await refreshPool();
-        await loadRecentWins();
-
-        if (address) {
-          const c2 = getReadContract();
-          setIsFreeAvailable(await c2.freeSpinAvailable(address));
+          if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
         }
-
-        setIsSpinning(false);
-      }, 4200);
-    } catch (err: any) {
-      console.error("Spin error:", err);
-      setIsSpinning(false);
-      setResult(err?.message || "Transaction failed");
-      setShowPopup(true);
+      } catch {}
     }
-  };
 
-  // ---------------------------
-  // HANDLE SPIN (FREE SPIN FIX)
-  // ---------------------------
-  const handleSpin = () => {
-    // free spin vain jos smart contract sanoo true
-    const useFree = isFreeAvailable === true;
-    void spin(useFree);
-  };
+    // 5. Visual wheel selection based on tier
+    let targetIndex: number;
 
-  // ---------------------------
-  // WHEEL RENDER
-  // ---------------------------
-  const renderWheel = () => (
-    <svg
-      viewBox="0 0 100 100"
-      className="w-full h-full"
-      style={{
-        transform: `rotate(${rotation}deg)`,
-        transition: isSpinning
-          ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
-          : "none",
-      }}
-    >
-      {Array.from({ length: 12 }).map((_, i) => {
-        const start = i * 30;
-        const end = start + 30;
+    if (tier === 4) {
+      targetIndex = JACKPOT_INDEX;
+    } else if (tier === 0) {
+      targetIndex =
+        TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
+    } else {
+      targetIndex =
+        MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
+    }
 
-        const x1 = 50 + 42 * Math.cos((start * Math.PI) / 180);
-        const y1 = 50 + 42 * Math.sin((start * Math.PI) / 180);
-        const x2 = 50 + 42 * Math.cos((end * Math.PI) / 180);
-        const y2 = 50 + 42 * Math.sin((end * Math.PI) / 180);
+    // Spin animation
+    setResult("Spinning…");
+    animateToSegment(targetIndex);
 
-        const isJackpot = i === JACKPOT_INDEX;
-        const isMoney = MONEY_INDICES.includes(i);
+    // 6. Show popup after animation
+    setTimeout(async () => {
+      const finalText = motivational ? getRandomMotivational() : display;
 
-        const fill = isJackpot
-          ? "#FFD700"
-          : isMoney
-          ? "#00FF9A"
-          : "#FF44CC";
+      setResult(finalText);
+      setShowPopup(true);
 
-        const mid = start + 15;
-        const lx = 50 + 34 * Math.cos((mid * Math.PI) / 180);
-        const ly = 50 + 34 * Math.sin((mid * Math.PI) / 180);
+      if (ethWin) setShowConfetti(true);
 
-        return (
-          <g key={i}>
-            <path
-              d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
-              fill={fill}
-              stroke="#000"
-              strokeWidth="0.4"
-            />
-            <text
-              x={lx}
-              y={ly}
-              fill={isJackpot ? "black" : "white"}
-              fontSize="6"
-              fontWeight="bold"
-              textAnchor="middle"
-              dominantBaseline="middle"
-              transform={`rotate(${mid + 90} ${lx} ${ly})`}
-            >
-              {SEGMENTS[i]}
-            </text>
-          </g>
-        );
-      })}
-      <circle cx="50" cy="50" r="10" fill="#111" />
-    </svg>
-  );
+      saveSpins(spinsToday + 1);
+      await refreshPool();
+      await loadRecentWins();
 
-  const shortAddr = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
-    : "";
+      if (address) {
+        const c2 = getReadContract();
+        setIsFreeAvailable(await c2.freeSpinAvailable(address));
+      }
+
+      setIsSpinning(false);
+    }, 4200);
+  } catch (err: any) {
+    console.error("Spin error:", err);
+    setIsSpinning(false);
+    setResult(err?.message || "Transaction failed");
+    setShowPopup(true);
+  }
+};
+
+// ---------------------------
+// HANDLE SPIN (TRUE FREE SPIN LOGIC)
+// ---------------------------
+const handleSpin = () => {
+  const useFree = isFreeAvailable === true;
+  void spin(useFree);
+};
+
+// ---------------------------
+// WHEEL RENDER
+// ---------------------------
+const renderWheel = () => (
+  <svg
+    viewBox="0 0 100 100"
+    className="w-full h-full"
+    style={{
+      transform: `rotate(${rotation}deg)`,
+      transition: isSpinning
+        ? "transform 4.2s cubic-bezier(0.17,0.67,0.12,0.99)"
+        : "none",
+    }}
+  >
+    {Array.from({ length: 12 }).map((_, i) => {
+      const start = i * 30;
+      const end = start + 30;
+
+      const x1 = 50 + 42 * Math.cos((start * Math.PI) / 180);
+      const y1 = 50 + 42 * Math.sin((start * Math.PI) / 180);
+      const x2 = 50 + 42 * Math.cos((end * Math.PI) / 180);
+      const y2 = 50 + 42 * Math.sin((end * Math.PI) / 180);
+
+      const isJackpot = i === JACKPOT_INDEX;
+      const isMoney = MONEY_INDICES.includes(i);
+
+      const fill = isJackpot
+        ? "#FFD700"
+        : isMoney
+        ? "#00FF9A"
+        : "#FF44CC";
+
+      const mid = start + 15;
+      const lx = 50 + 34 * Math.cos((mid * Math.PI) / 180);
+      const ly = 50 + 34 * Math.sin((mid * Math.PI) / 180);
+
+      return (
+        <g key={i}>
+          <path
+            d={`M50,50 L${x1},${y1} A42,42 0 0,1 ${x2},${y2} Z`}
+            fill={fill}
+            stroke="#000"
+            strokeWidth="0.4"
+          />
+          <text
+            x={lx}
+            y={ly}
+            fill={isJackpot ? "black" : "white"}
+            fontSize="6"
+            fontWeight="bold"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${mid + 90} ${lx} ${ly})`}
+          >
+            {SEGMENTS[i]}
+          </text>
+        </g>
+      );
+    })}
+    <circle cx="50" cy="50" r="10" fill="#111" />
+  </svg>
+);
+
+const shortAddr = address
+  ? `${address.slice(0, 6)}...${address.slice(-4)}`
+  : "";
+
 
   // nappiteksti käyttää samaa totuutta kuin handleSpin
   const buttonLabel = isSpinning
