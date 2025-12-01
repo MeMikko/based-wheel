@@ -27,6 +27,7 @@ const ADMIN_FALLBACK =
 
 const SPIN_PRICE = parseEther("0.00042");
 
+// Contract ABI
 const CONTRACT_ABI = [
   "function spinFree()",
   "function spinPaid() payable",
@@ -38,20 +39,20 @@ const CONTRACT_ABI = [
   "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)",
 ];
 
-// Rulla: vain rahaslotit + lyhyt jackpot-teksti
+// Rullan labelit: vain rahasummat + lyhennetty jackpot
 const SEGMENTS = [
-  "JPOT", // 0 jackpot
-  "",     // 1
-  "0.001",// 2 money
-  "",     // 3
-  "",     // 4
-  "0.01", // 5 money
-  "",     // 6
-  "0.05", // 7 money
-  "",     // 8
-  "",     // 9
-  "0.001",// 10 money
-  "",     // 11
+  "JPOT",  // 0 jackpot
+  "",      // 1
+  "0.001", // 2 money
+  "",      // 3
+  "",      // 4
+  "0.01",  // 5 money
+  "",      // 6
+  "0.05",  // 7 money
+  "",      // 8
+  "",      // 9
+  "0.001", // 10 money
+  "",      // 11
 ];
 
 // missä ruuduissa on rahaa / tekstiä
@@ -59,25 +60,28 @@ const JACKPOT_INDEX = 0;
 const MONEY_INDICES = [2, 5, 7, 10];
 const TEXT_INDICES = [1, 3, 4, 6, 8, 9, 11];
 
-// Random motivational-tekstit popupille kun tier = 0
-const MOTIVATIONAL_QUOTES = [
-  "Based move",
-  "Almost WAGMI",
-  "Spin harder anon",
-  "Your time will come",
-  "Send it",
-  "Blessed by RNG",
-  "Skill issue?",
-  "Just warming up",
-  "Nearly!",
-  "Better luck next spin",
-  "You were close",
+// Motivational-tekstit kun SC antaa "Motivational only"
+const MOTIVATIONAL_MESSAGES = [
+  "GM fren, today might be the day 🌀",
+  "WAGMI… mutta ehkä vasta seuraavalla spinnillä ✨",
+  "No ETH this time, only vibes 💜",
+  "Based, but not paid… yet 🧠",
+  "House is watching. Try again degen 👀",
+  "You survived another spin. That’s a win 🛡️",
+  "Variance is real. Keep spinning anon 🎰",
+  "No pump without some dump. Stay based 📉📈",
 ];
+
+const getRandomMotivational = () =>
+  MOTIVATIONAL_MESSAGES[
+    Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)
+  ];
 
 // Global TS
 declare global {
   interface Window {
     ethereum?: any;
+    parent?: any;
   }
 }
 
@@ -133,6 +137,8 @@ export default function Page() {
   const connectWallet = async () => {
     try {
       let ethProvider: any = null;
+
+      if (typeof window === "undefined") return;
 
       if (!window.ethereum) {
         // WalletConnect fallback
@@ -231,11 +237,13 @@ export default function Page() {
           );
         }
 
-        // Free spin
+        // Free spin (suoraan smart contractilta)
         if (address) {
           const c = getReadContract();
           const free = await c.freeSpinAvailable(address);
           setIsFreeAvailable(free);
+        } else {
+          setIsFreeAvailable(null);
         }
       } catch (e) {
         console.error(e);
@@ -314,7 +322,7 @@ export default function Page() {
     const segmentAngle = 360 / SEGMENTS.length; // 30°
     const segmentCenter = segmentIndex * segmentAngle + segmentAngle / 2;
 
-    // SVG 0° = oikealle, meidän nuoli = ylös (= 270°)
+    // SVG 0° = oikealle, nuoli = ylös (270°)
     const pointerAngle = 270;
     const targetRotation = pointerAngle - segmentCenter;
 
@@ -328,7 +336,7 @@ export default function Page() {
   };
 
   // ---------------------------
-  // SPIN FUNCTION (RAW TX + TIER-POHJAINEN ANIMAATIO)
+  // SPIN FUNCTION (RAW JSON-RPC + TIER-POHJAINEN ANIMAATIO)
   // ---------------------------
   const spin = async (useFree: boolean) => {
     if (!address) {
@@ -345,72 +353,82 @@ export default function Page() {
       setResult("Awaiting wallet confirmation…");
 
       const signer = await provider.getSigner();
+      const userAddress = await signer.getAddress();
       const iface = new Interface(CONTRACT_ABI);
 
-      // 1. Encode calldata ja lähetä raw-tx
+      // 1. Encode calldata
       const calldata = iface.encodeFunctionData(
         useFree ? "spinFree" : "spinPaid",
         []
       );
 
-      const tx = await signer.sendTransaction({
+      // 2. Rakennetaan raw JSON-RPC tx → lompakko hoitaa gasin & signauksen
+      const unsignedTx: any = {
+        from: userAddress,
         to: CONTRACT_ADDRESS,
         data: calldata,
-        ...(useFree ? {} : { value: SPIN_PRICE }),
-        gasLimit: 200000n,
-      });
+        ...(useFree
+          ? {}
+          : { value: "0x" + SPIN_PRICE.toString(16) }), // hex string
+      };
 
-      // 2. Odotetaan on-chain tulos
-      const receipt = await tx.wait();
+      const txHash: string = await provider.send("eth_sendTransaction", [
+        unsignedTx,
+      ]);
 
+      // 3. Odotetaan kuitti ketjulta (revertit näkyy täällä)
+      const receipt = await provider.waitForTransaction(txHash);
+
+      let display = "Spin complete!";
       let ethWin = false;
       let tier = 0;
+      let motivational = false;
 
       for (const log of receipt.logs) {
         try {
           const pl = iface.parseLog(log);
           if (pl.name === "SpinResult") {
             tier = Number(pl.args.tier);
+            const msg: string = pl.args.message;
+
+            if (msg.startsWith("Motivational only")) {
+              motivational = true;
+            } else {
+              display = msg;
+            }
+
             if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
           }
         } catch {}
       }
 
-      // 3. Valitaan segmentti sopimuksen tierin mukaan
+      // 4. Valitaan segmentti sopimuksen tierin mukaan
       let targetIndex: number;
 
       if (tier === 4) {
+        // jackpot
         targetIndex = JACKPOT_INDEX;
       } else if (tier === 0) {
+        // ei rahaa → jokin tyhjä slotti
         const random =
           TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
         targetIndex = random;
       } else {
+        // kaikki maksavat tierit → rahaslotit
         const random =
           MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
         targetIndex = random;
       }
 
-      // 4. Käynnistetään animaatio
+      // 5. Käynnistetään animaatio
       setResult("Spinning…");
       animateToSegment(targetIndex);
 
-      // 5. Näytetään tulos animaation lopuksi
+      // 6. Animaation jälkeen popup
       setTimeout(async () => {
-        let popupText: string;
+        const finalText = motivational ? getRandomMotivational() : display;
 
-        if (tier === 0) {
-          // motivational-only → random quote
-          popupText =
-            MOTIVATIONAL_QUOTES[
-              Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)
-            ];
-        } else {
-          // rahavoitto tai jackpot → se mitä rulla näyttää
-          popupText = SEGMENTS[targetIndex] || "Winner";
-        }
-
-        setResult(popupText);
+        setResult(finalText);
         setShowPopup(true);
 
         if (ethWin) setShowConfetti(true);
@@ -438,7 +456,7 @@ export default function Page() {
   // HANDLE SPIN (FREE SPIN FIX)
   // ---------------------------
   const handleSpin = () => {
-    // free spin vain jos SC sanoo true
+    // free spin vain jos smart contract sanoo true
     const useFree = isFreeAvailable === true;
     void spin(useFree);
   };
@@ -487,20 +505,18 @@ export default function Page() {
               stroke="#000"
               strokeWidth="0.4"
             />
-            {SEGMENTS[i] && (
-              <text
-                x={lx}
-                y={ly}
-                fill={isJackpot ? "black" : "white"}
-                fontSize="6"
-                fontWeight="bold"
-                textAnchor="middle"
-                dominantBaseline="middle"
-                transform={`rotate(${mid + 90} ${lx} ${ly})`}
-              >
-                {SEGMENTS[i]}
-              </text>
-            )}
+            <text
+              x={lx}
+              y={ly}
+              fill={isJackpot ? "black" : "white"}
+              fontSize="6"
+              fontWeight="bold"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              transform={`rotate(${mid + 90} ${lx} ${ly})`}
+            >
+              {SEGMENTS[i]}
+            </text>
           </g>
         );
       })}
@@ -512,6 +528,7 @@ export default function Page() {
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : "";
 
+  // nappiteksti käyttää samaa totuutta kuin handleSpin
   const buttonLabel = isSpinning
     ? "SPINNING..."
     : isFreeAvailable === true
@@ -546,12 +563,12 @@ export default function Page() {
                 const text = result || "";
                 const encoded = encodeURIComponent(text);
 
-                if (window.parent) {
+                if (typeof window !== "undefined" && window.parent) {
                   window.parent.postMessage(
                     { type: "farcaster-share", message: text },
                     "*"
                   );
-                } else {
+                } else if (typeof window !== "undefined") {
                   window.open(
                     `https://warpcast.com/~/compose?text=${encoded}`,
                     "_blank"
