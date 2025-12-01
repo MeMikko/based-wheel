@@ -1,0 +1,7 @@
+{
+  "version": "1",
+  "name": "Based Wheel",
+  "icon_url": "https://based-app-psi.vercel.app/icon.png",
+  "home_url": "https://based-app-psi.vercel.app/app",
+  "callback_url": "https://based-app-psi.vercel.app/api/farcaster/callback"
+}
