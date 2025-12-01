@@ -81,7 +81,6 @@ const getRandomMotivational = () =>
 declare global {
   interface Window {
     ethereum?: any;
-    parent?: any;
   }
 }
 
