@@ -344,45 +344,33 @@ const spin = async (useFree: boolean) => {
   }
 
   try {
-    if (!provider) return;
-
     setIsSpinning(true);
     setShowPopup(false);
     setShowConfetti(false);
     setResult("Awaiting wallet confirmation…");
 
+    let prov = provider;
+    if (!prov) return;
+
     // --- ENSURE WALLET IS ON BASE ---
-    const chainIdHex = await provider.send("eth_chainId", []);
+    const chainIdHex = await prov.send("eth_chainId", []);
+
     if (chainIdHex !== BASE_CHAIN_HEX) {
-      try {
-        await provider.send("wallet_switchEthereumChain", [
-          { chainId: BASE_CHAIN_HEX }
-        ]);
-      } catch (err: any) {
-        if (err.code === 4902) {
-          await provider.send("wallet_addEthereumChain", [
-            {
-              chainId: BASE_CHAIN_HEX,
-              chainName: "Base",
-              rpcUrls: [BASE_RPC],
-              blockExplorerUrls: ["https://basescan.org"],
-              nativeCurrency: {
-                name: "Ether",
-                symbol: "ETH",
-                decimals: 18
-              }
-            }
-          ]);
-        } else {
-          alert("Please switch to Base network first.");
-          setIsSpinning(false);
-          return;
-        }
-      }
+      // Switch network
+      await prov.send("wallet_switchEthereumChain", [
+        { chainId: BASE_CHAIN_HEX }
+      ]);
+
+      // Create NEW provider after network switch
+      const newProv = new BrowserProvider(window.ethereum);
+      prov = newProv;
+      setProvider(newProv);
+
+      // Allow Metamask to update internally
+      await new Promise(res => setTimeout(res, 200));
     }
 
-    // --- USE METAMASK SIGNER DIRECTLY ---
-    const signer = await provider.getSigner();
+    const signer = await prov.getSigner();
     const iface = new Interface(CONTRACT_ABI);
 
     const calldata = iface.encodeFunctionData(
@@ -390,18 +378,17 @@ const spin = async (useFree: boolean) => {
       []
     );
 
-    // --- SEND TX (NO signer.connect ANYMORE!) ---
     const tx = await signer.sendTransaction({
       to: CONTRACT_ADDRESS,
       data: calldata,
       ...(useFree ? {} : { value: SPIN_PRICE }),
       gasLimit: 200000n,
-      chainId: BASE_CHAIN_ID // IMPORTANT FIX!
+      chainId: BASE_CHAIN_ID
     });
 
-    // --- WAIT RECEIPT ---
     const receipt = await tx.wait();
 
+    // ---- parse result (unchanged) ----
     let display = "Spin complete!";
     let ethWin = false;
     let tier = 0;
@@ -422,27 +409,18 @@ const spin = async (useFree: boolean) => {
       } catch {}
     }
 
-    // --- SPIN WHEEL SELECTION ---
-    let targetIndex: number;
-
-    if (tier === 4) targetIndex = JACKPOT_INDEX;
-    else if (tier === 0)
-      targetIndex =
-        TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
-    else
-      targetIndex =
-        MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
+    let targetIndex = tier === 4
+      ? JACKPOT_INDEX
+      : tier === 0
+      ? TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)]
+      : MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
 
     setResult("Spinning…");
     animateToSegment(targetIndex);
 
-    // --- AFTER ANIMATION ---
     setTimeout(async () => {
-      const finalText = motivational ? getRandomMotivational() : display;
-
-      setResult(finalText);
+      setResult(motivational ? getRandomMotivational() : display);
       setShowPopup(true);
-
       if (ethWin) setShowConfetti(true);
 
       saveSpins(spinsToday + 1);
@@ -463,6 +441,7 @@ const spin = async (useFree: boolean) => {
     setShowPopup(true);
   }
 };
+
 
 
 
