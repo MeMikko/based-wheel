@@ -335,7 +335,7 @@ export default function Page() {
   };
 
   // ---------------------------
-// SPIN FUNCTION (BASE-RPC FIX + TIER LOGIC + ANIMATION)
+// SPIN FUNCTION (FIXED - NO signer.connect, NO eth_sendTransaction)
 // ---------------------------
 const spin = async (useFree: boolean) => {
   if (!address) {
@@ -360,18 +360,15 @@ const spin = async (useFree: boolean) => {
       []
     );
 
-    // 2. IMPORTANT FIX: signer MUST use Base RPC
-    const rpcSigner = signer.connect(baseRpcProvider);
-
-    // 3. Send actual transaction (no eth_sendTransaction anymore)
-    const tx = await rpcSigner.sendTransaction({
+    // 2. Send transaction normally (Signer already has the correct RPC)
+    const tx = await signer.sendTransaction({
       to: CONTRACT_ADDRESS,
       data: calldata,
       ...(useFree ? {} : { value: SPIN_PRICE }),
       gasLimit: 200000n,
     });
 
-    // 4. Wait for confirmation
+    // 3. Wait for confirmation
     const receipt = await tx.wait();
 
     let display = "Spin complete!";
@@ -398,7 +395,7 @@ const spin = async (useFree: boolean) => {
       } catch {}
     }
 
-    // 5. Visual wheel selection based on tier
+    // Pick wheel segment
     let targetIndex: number;
 
     if (tier === 4) {
@@ -415,7 +412,7 @@ const spin = async (useFree: boolean) => {
     setResult("Spinning…");
     animateToSegment(targetIndex);
 
-    // 6. Show popup after animation
+    // 6. Popup after animation
     setTimeout(async () => {
       const finalText = motivational ? getRandomMotivational() : display;
 
@@ -442,6 +439,7 @@ const spin = async (useFree: boolean) => {
     setShowPopup(true);
   }
 };
+
 
 // ---------------------------
 // HANDLE SPIN (TRUE FREE SPIN LOGIC)
