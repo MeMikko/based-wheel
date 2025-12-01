@@ -38,25 +38,41 @@ const CONTRACT_ABI = [
   "event SpinResult(address indexed player, bool indexed isFree, uint8 tier, uint256 amountWei, string message)",
 ];
 
+// Rulla: vain rahaslotit + lyhyt jackpot-teksti
 const SEGMENTS = [
-  "JACKPOT", // 0
-  "HODL", // 1
-  "ETH", // 2
-  "WAGMI", // 3
-  "Wen?", // 4
-  "ETH", // 5
-  "ship it", // 6
-  "ETH", // 7
-  "HODL", // 8
-  "LFG", // 9
-  "ETH", // 10
-  "Wen?", // 11
+  "JPOT", // 0 jackpot
+  "",     // 1
+  "0.001",// 2 money
+  "",     // 3
+  "",     // 4
+  "0.01", // 5 money
+  "",     // 6
+  "0.05", // 7 money
+  "",     // 8
+  "",     // 9
+  "0.001",// 10 money
+  "",     // 11
 ];
 
 // missä ruuduissa on rahaa / tekstiä
 const JACKPOT_INDEX = 0;
 const MONEY_INDICES = [2, 5, 7, 10];
 const TEXT_INDICES = [1, 3, 4, 6, 8, 9, 11];
+
+// Random motivational-tekstit popupille kun tier = 0
+const MOTIVATIONAL_QUOTES = [
+  "Based move",
+  "Almost WAGMI",
+  "Spin harder anon",
+  "Your time will come",
+  "Send it",
+  "Blessed by RNG",
+  "Skill issue?",
+  "Just warming up",
+  "Nearly!",
+  "Better luck next spin",
+  "You were close",
+];
 
 // Global TS
 declare global {
@@ -347,7 +363,6 @@ export default function Page() {
       // 2. Odotetaan on-chain tulos
       const receipt = await tx.wait();
 
-      let display = "Spin complete!";
       let ethWin = false;
       let tier = 0;
 
@@ -356,7 +371,6 @@ export default function Page() {
           const pl = iface.parseLog(log);
           if (pl.name === "SpinResult") {
             tier = Number(pl.args.tier);
-            display = pl.args.message;
             if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
           }
         } catch {}
@@ -383,7 +397,20 @@ export default function Page() {
 
       // 5. Näytetään tulos animaation lopuksi
       setTimeout(async () => {
-        setResult(display);
+        let popupText: string;
+
+        if (tier === 0) {
+          // motivational-only → random quote
+          popupText =
+            MOTIVATIONAL_QUOTES[
+              Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)
+            ];
+        } else {
+          // rahavoitto tai jackpot → se mitä rulla näyttää
+          popupText = SEGMENTS[targetIndex] || "Winner";
+        }
+
+        setResult(popupText);
         setShowPopup(true);
 
         if (ethWin) setShowConfetti(true);
@@ -411,7 +438,7 @@ export default function Page() {
   // HANDLE SPIN (FREE SPIN FIX)
   // ---------------------------
   const handleSpin = () => {
-    // ✅ free spin vain jos SC sanoo true
+    // free spin vain jos SC sanoo true
     const useFree = isFreeAvailable === true;
     void spin(useFree);
   };
@@ -460,18 +487,20 @@ export default function Page() {
               stroke="#000"
               strokeWidth="0.4"
             />
-            <text
-              x={lx}
-              y={ly}
-              fill={isJackpot ? "black" : "white"}
-              fontSize="6"
-              fontWeight="bold"
-              textAnchor="middle"
-              dominantBaseline="middle"
-              transform={`rotate(${mid + 90} ${lx} ${ly})`}
-            >
-              {SEGMENTS[i]}
-            </text>
+            {SEGMENTS[i] && (
+              <text
+                x={lx}
+                y={ly}
+                fill={isJackpot ? "black" : "white"}
+                fontSize="6"
+                fontWeight="bold"
+                textAnchor="middle"
+                dominantBaseline="middle"
+                transform={`rotate(${mid + 90} ${lx} ${ly})`}
+              >
+                {SEGMENTS[i]}
+              </text>
+            )}
           </g>
         );
       })}
@@ -483,7 +512,6 @@ export default function Page() {
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : "";
 
-  // ✅ nappiteksti käyttää samaa totuutta kuin handleSpin
   const buttonLabel = isSpinning
     ? "SPINNING..."
     : isFreeAvailable === true
