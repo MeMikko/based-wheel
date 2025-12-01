@@ -40,17 +40,17 @@ const CONTRACT_ABI = [
 
 const SEGMENTS = [
   "JACKPOT", // 0
-  "HODL",    // 1
-  "ETH",     // 2
-  "WAGMI",   // 3
-  "Wen?",    // 4
-  "ETH",     // 5
+  "HODL", // 1
+  "ETH", // 2
+  "WAGMI", // 3
+  "Wen?", // 4
+  "ETH", // 5
   "ship it", // 6
-  "ETH",     // 7
-  "HODL",    // 8
-  "LFG",     // 9
-  "ETH",     // 10
-  "Wen?",    // 11
+  "ETH", // 7
+  "HODL", // 8
+  "LFG", // 9
+  "ETH", // 10
+  "Wen?", // 11
 ];
 
 // missä ruuduissa on rahaa / tekstiä
@@ -305,9 +305,7 @@ export default function Page() {
     setRotation((prev) => {
       const current = ((prev % 360) + 360) % 360;
       let delta = targetRotation - current;
-      // normalisoidaan 0–360
       while (delta < 0) delta += 360;
-      // lisätään monta kokokierrosta efektiä varten
       const extraTurns = 6 * 360;
       return prev + extraTurns + delta;
     });
@@ -368,15 +366,12 @@ export default function Page() {
       let targetIndex: number;
 
       if (tier === 4) {
-        // jackpot
         targetIndex = JACKPOT_INDEX;
       } else if (tier === 0) {
-        // tekstitulokset
         const random =
           TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
         targetIndex = random;
       } else {
-        // kaikki maksavat tierit → ETH-slotit
         const random =
           MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
         targetIndex = random;
@@ -412,8 +407,12 @@ export default function Page() {
     }
   };
 
+  // ---------------------------
+  // HANDLE SPIN (FREE SPIN FIX)
+  // ---------------------------
   const handleSpin = () => {
-    const useFree = spinsToday === 0 && isFreeAvailable !== false;
+    // ✅ free spin vain jos SC sanoo true
+    const useFree = isFreeAvailable === true;
     void spin(useFree);
   };
 
@@ -483,9 +482,11 @@ export default function Page() {
   const shortAddr = address
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : "";
+
+  // ✅ nappiteksti käyttää samaa totuutta kuin handleSpin
   const buttonLabel = isSpinning
     ? "SPINNING..."
-    : spinsToday === 0 && isFreeAvailable !== false
+    : isFreeAvailable === true
     ? "FREE SPIN"
     : "SPIN 0.00042 ETH";
 
@@ -573,13 +574,17 @@ export default function Page() {
         {/* WHEEL */}
         <div className="relative w-72 h-72 mb-8 mx-auto hover:scale-105 hover:rotate-1 duration-300">
           {renderWheel()}
-          <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 
+          <div
+            className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 
           border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent 
-          border-t-[24px] border-t-yellow-400 animate-pulse" />
+          border-t-[24px] border-t-yellow-400 animate-pulse"
+          />
         </div>
 
         {result && !showPopup && (
-          <h2 className="text-2xl text-yellow-300 font-black mb-4">{result}</h2>
+          <h2 className="text-2xl text-yellow-300 font-black mb-4">
+            {result}
+          </h2>
         )}
 
         <div className="text-xl font-bold mb-2">
