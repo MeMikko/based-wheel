@@ -1,18 +1,14 @@
 import { ImageResponse } from "next/og";
 import { JsonRpcProvider, Contract, formatEther } from "ethers";
 
-export const size = {
-  width: 1200,
-  height: 630,
-};
+export const runtime = "edge";
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!;
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC!;
+
 const CONTRACT_ABI = [
   "function getPoolBalance() view returns (uint256)"
 ];
-
-export const contentType = "image/png";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -21,13 +17,12 @@ export async function GET(req: Request) {
   let text = "Spin the Based Wheel";
   let subtitle = "Win ETH or motivational wisdom";
 
-  // optional: change text when clicking frame
   if (action === "spin") {
     text = "Connect wallet to spin";
     subtitle = "1 free spin/day";
   }
 
-  // Load pool amount
+  // Fetch pool balance
   let pool = "Loading...";
   try {
     const provider = new JsonRpcProvider(BASE_RPC);
@@ -42,8 +37,8 @@ export async function GET(req: Request) {
     (
       <div
         style={{
-          width: "100%",
-          height: "100%",
+          width: "1200px",
+          height: "630px",
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
@@ -72,6 +67,9 @@ export async function GET(req: Request) {
         </div>
       </div>
     ),
-    size
+    {
+      width: 1200,
+      height: 630,
+    }
   );
 }
