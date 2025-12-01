@@ -337,6 +337,33 @@ export default function Page() {
   // ---------------------------
 // SPIN FUNCTION (FIXED - NO signer.connect, NO eth_sendTransaction)
 // ---------------------------
+
+  // -- ENSURE WALLET IS ON BASE --
+const chainId = await provider.send("eth_chainId", []);
+if (chainId !== BASE_CHAIN_HEX) {
+  try {
+    await provider.send("wallet_switchEthereumChain", [
+      { chainId: BASE_CHAIN_HEX }
+    ]);
+  } catch (err: any) {
+    if (err.code === 4902) {
+      await provider.send("wallet_addEthereumChain", [
+        {
+          chainId: BASE_CHAIN_HEX,
+          chainName: "Base",
+          rpcUrls: [BASE_RPC],
+          nativeCurrency: { name: "Ethereum", symbol: "ETH", decimals: 18 },
+          blockExplorerUrls: ["https://basescan.org"],
+        },
+      ]);
+    } else {
+      alert("Please switch your MetaMask network to Base mainnet.");
+      setIsSpinning(false);
+      return;
+    }
+  }
+}
+
 const spin = async (useFree: boolean) => {
   if (!address) {
     await connectWallet();
