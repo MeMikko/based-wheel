@@ -39,22 +39,24 @@ const CONTRACT_ABI = [
 ];
 
 const SEGMENTS = [
-  "JACKPOT",
-  "HODL",
-  "ETH",
-  "WAGMI",
-  "Wen?",
-  "ETH",
-  "ship it",
-  "ETH",
-  "HODL",
-  "LFG",
-  "ETH",
-  "Wen?",
+  "JACKPOT", // 0
+  "HODL",    // 1
+  "ETH",     // 2
+  "WAGMI",   // 3
+  "Wen?",    // 4
+  "ETH",     // 5
+  "ship it", // 6
+  "ETH",     // 7
+  "HODL",    // 8
+  "LFG",     // 9
+  "ETH",     // 10
+  "Wen?",    // 11
 ];
 
-const MONEY_SEGMENTS = new Set([2, 5, 8, 10]);
+// missä ruuduissa on rahaa / tekstiä
 const JACKPOT_INDEX = 0;
+const MONEY_INDICES = [2, 5, 7, 10];
+const TEXT_INDICES = [1, 3, 4, 6, 8, 9, 11];
 
 // Global TS
 declare global {
@@ -224,7 +226,7 @@ export default function Page() {
       }
     };
 
-    run();
+    void run();
   }, [provider, address, adminAddressResolved]);
 
   // ---------------------------
@@ -236,7 +238,6 @@ export default function Page() {
   const getWriteContract = async () => {
     if (!provider) return null;
     const signer = await provider.getSigner();
-    // signer provider lähettää tx → oikea chain
     return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
   };
 
@@ -291,8 +292,30 @@ export default function Page() {
   };
 
   // ---------------------------
-  // SPIN FUNCTION (RAW TX)
-// ---------------------------
+  // HELPER: ANIMATE TO GIVEN SEGMENT INDEX
+  // ---------------------------
+  const animateToSegment = (segmentIndex: number) => {
+    const segmentAngle = 360 / SEGMENTS.length; // 30°
+    const segmentCenter = segmentIndex * segmentAngle + segmentAngle / 2;
+
+    // SVG 0° = oikealle, meidän nuoli = ylös (= 270°)
+    const pointerAngle = 270;
+    const targetRotation = pointerAngle - segmentCenter;
+
+    setRotation((prev) => {
+      const current = ((prev % 360) + 360) % 360;
+      let delta = targetRotation - current;
+      // normalisoidaan 0–360
+      while (delta < 0) delta += 360;
+      // lisätään monta kokokierrosta efektiä varten
+      const extraTurns = 6 * 360;
+      return prev + extraTurns + delta;
+    });
+  };
+
+  // ---------------------------
+  // SPIN FUNCTION (RAW TX + TIER-POHJAINEN ANIMAATIO)
+  // ---------------------------
   const spin = async (useFree: boolean) => {
     if (!address) {
       await connectWallet();
@@ -310,13 +333,12 @@ export default function Page() {
       const signer = await provider.getSigner();
       const iface = new Interface(CONTRACT_ABI);
 
-      // 1. Encode calldata
+      // 1. Encode calldata ja lähetä raw-tx
       const calldata = iface.encodeFunctionData(
         useFree ? "spinFree" : "spinPaid",
         []
       );
 
-      // 2. Send raw transaction
       const tx = await signer.sendTransaction({
         to: CONTRACT_ADDRESS,
         data: calldata,
@@ -324,30 +346,47 @@ export default function Page() {
         gasLimit: 200000n,
       });
 
-      // 3. Immediately animate wheel
-      setResult("Spinning…");
-
-      const fullTurns = 8 + Math.random() * 4;
-      const endRotation =
-        rotation + fullTurns * 360 + Math.random() * 360;
-      setRotation(endRotation);
-
-      // 4. Wait for on-chain result
+      // 2. Odotetaan on-chain tulos
       const receipt = await tx.wait();
 
       let display = "Spin complete!";
       let ethWin = false;
+      let tier = 0;
 
       for (const log of receipt.logs) {
         try {
           const pl = iface.parseLog(log);
           if (pl.name === "SpinResult") {
+            tier = Number(pl.args.tier);
             display = pl.args.message;
             if (BigInt(pl.args.amountWei) > 0n) ethWin = true;
           }
         } catch {}
       }
 
+      // 3. Valitaan segmentti sopimuksen tierin mukaan
+      let targetIndex: number;
+
+      if (tier === 4) {
+        // jackpot
+        targetIndex = JACKPOT_INDEX;
+      } else if (tier === 0) {
+        // tekstitulokset
+        const random =
+          TEXT_INDICES[Math.floor(Math.random() * TEXT_INDICES.length)];
+        targetIndex = random;
+      } else {
+        // kaikki maksavat tierit → ETH-slotit
+        const random =
+          MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
+        targetIndex = random;
+      }
+
+      // 4. Käynnistetään animaatio
+      setResult("Spinning…");
+      animateToSegment(targetIndex);
+
+      // 5. Näytetään tulos animaation lopuksi
       setTimeout(async () => {
         setResult(display);
         setShowPopup(true);
@@ -402,7 +441,7 @@ export default function Page() {
         const y2 = 50 + 42 * Math.sin((end * Math.PI) / 180);
 
         const isJackpot = i === JACKPOT_INDEX;
-        const isMoney = MONEY_SEGMENTS.has(i);
+        const isMoney = MONEY_INDICES.includes(i);
 
         const fill = isJackpot
           ? "#FFD700"
@@ -519,12 +558,12 @@ export default function Page() {
             )}
           </div>
 
-        <button
-          onClick={connectWallet}
-          className="px-4 py-2 rounded-xl bg-black/60 border border-white/20 hover:bg-white hover:text-black transition"
-        >
-          {address ? displayUser : "Connect Wallet"}
-        </button>
+          <button
+            onClick={connectWallet}
+            className="px-4 py-2 rounded-xl bg-black/60 border border-white/20 hover:bg-white hover:text-black transition"
+          >
+            {address ? displayUser : "Connect Wallet"}
+          </button>
         </div>
 
         <p className="opacity-80 mb-4">
