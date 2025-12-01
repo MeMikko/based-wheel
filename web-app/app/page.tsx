@@ -335,35 +335,8 @@ export default function Page() {
   };
 
   // ---------------------------
-// SPIN FUNCTION (FIXED - NO signer.connect, NO eth_sendTransaction)
+// SPIN FUNCTION (BASE-RPC FIX + TIER LOGIC + ANIMATION)
 // ---------------------------
-
-  // -- ENSURE WALLET IS ON BASE --
-const chainId = await provider.send("eth_chainId", []);
-if (chainId !== BASE_CHAIN_HEX) {
-  try {
-    await provider.send("wallet_switchEthereumChain", [
-      { chainId: BASE_CHAIN_HEX }
-    ]);
-  } catch (err: any) {
-    if (err.code === 4902) {
-      await provider.send("wallet_addEthereumChain", [
-        {
-          chainId: BASE_CHAIN_HEX,
-          chainName: "Base",
-          rpcUrls: [BASE_RPC],
-          nativeCurrency: { name: "Ethereum", symbol: "ETH", decimals: 18 },
-          blockExplorerUrls: ["https://basescan.org"],
-        },
-      ]);
-    } else {
-      alert("Please switch your MetaMask network to Base mainnet.");
-      setIsSpinning(false);
-      return;
-    }
-  }
-}
-
 const spin = async (useFree: boolean) => {
   if (!address) {
     await connectWallet();
@@ -378,24 +351,59 @@ const spin = async (useFree: boolean) => {
     setShowConfetti(false);
     setResult("Awaiting wallet confirmation…");
 
+    // -- ENSURE WALLET IS ON BASE --
+    try {
+      const currentChain = await provider.send("eth_chainId", []);
+
+      if (currentChain !== BASE_CHAIN_HEX) {
+        try {
+          await provider.send("wallet_switchEthereumChain", [
+            { chainId: BASE_CHAIN_HEX }
+          ]);
+        } catch (err: any) {
+          if (err.code === 4902) {
+            await provider.send("wallet_addEthereumChain", [
+              {
+                chainId: BASE_CHAIN_HEX,
+                chainName: "Base",
+                rpcUrls: [BASE_RPC],
+                nativeCurrency: {
+                  name: "Ethereum",
+                  symbol: "ETH",
+                  decimals: 18
+                },
+                blockExplorerUrls: ["https://basescan.org"]
+              }
+            ]);
+          } else {
+            alert("Please switch your MetaMask network to Base.");
+            setIsSpinning(false);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Chain check failed:", err);
+    }
+
+    // Continue with spin...
     const signer = await provider.getSigner();
     const iface = new Interface(CONTRACT_ABI);
-
-    // 1. Encode calldata
     const calldata = iface.encodeFunctionData(
       useFree ? "spinFree" : "spinPaid",
       []
     );
 
-    // 2. Send transaction normally (Signer already has the correct RPC)
-    const tx = await signer.sendTransaction({
+    // IMPORTANT: signer must operate on Base RPC
+    const rpcSigner = signer.connect(baseRpcProvider);
+
+    const tx = await rpcSigner.sendTransaction({
       to: CONTRACT_ADDRESS,
       data: calldata,
       ...(useFree ? {} : { value: SPIN_PRICE }),
-      gasLimit: 200000n,
+      gasLimit: 200000n
     });
 
-    // 3. Wait for confirmation
     const receipt = await tx.wait();
 
     let display = "Spin complete!";
@@ -403,13 +411,12 @@ const spin = async (useFree: boolean) => {
     let tier = 0;
     let motivational = false;
 
-    // Parse SpinResult event
     for (const log of receipt.logs) {
       try {
         const pl = iface.parseLog(log);
         if (pl.name === "SpinResult") {
           tier = Number(pl.args.tier);
-          const msg = pl.args.message as string;
+          const msg = pl.args.message;
 
           if (msg.startsWith("Motivational")) {
             motivational = true;
@@ -422,7 +429,6 @@ const spin = async (useFree: boolean) => {
       } catch {}
     }
 
-    // Pick wheel segment
     let targetIndex: number;
 
     if (tier === 4) {
@@ -435,11 +441,9 @@ const spin = async (useFree: boolean) => {
         MONEY_INDICES[Math.floor(Math.random() * MONEY_INDICES.length)];
     }
 
-    // Spin animation
     setResult("Spinning…");
     animateToSegment(targetIndex);
 
-    // 6. Popup after animation
     setTimeout(async () => {
       const finalText = motivational ? getRandomMotivational() : display;
 
